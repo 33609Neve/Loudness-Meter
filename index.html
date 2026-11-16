@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="theme-color" content="#141922" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="ULM Pro" />
+  <link rel="manifest" href="./manifest.webmanifest" />
+  <link rel="icon" type="image/svg+xml" href="./icon.svg" />
+  <link rel="apple-touch-icon" href="./icon.svg" />
+  <title>ULM Pro — Standalone Loudness & True Peak Meter</title>
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <div id="app" class="app-shell">
+    <!-- Top Header / Hardware Toolbar -->
+    <header class="topbar">
+      <div class="brand-group">
+        <div class="brand-logo">
+          <span class="logo-dot"></span>
+          <span class="logo-title">ULM<span class="logo-accent">PRO</span></span>
+        </div>
+        <span class="standard-badge" title="ITU-R BS.1770-4 / EBU R128 Compliant">BS.1770-4 / R128</span>
+        <div id="statusBadge" class="status-badge standby">
+          <span class="status-led"></span>
+          <span id="statusText">STANDBY</span>
+        </div>
+      </div>
+
+      <!-- Audio Source Controls -->
+      <div class="source-controls">
+        <div class="input-group">
+          <button id="btnLiveInput" class="btn btn-source" title="오디오 인터페이스, 마이크, BlackHole 등 입력 캡처">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
+              <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+              <line x1="12" y1="19" x2="12" y2="23"/>
+              <line x1="8" y1="23" x2="16" y2="23"/>
+            </svg>
+            <span>오디오 장치 입력</span>
+          </button>
+          <select id="deviceSelect" class="select-compact" title="오디오 입력 장치 선택">
+            <option value="">기본 입력 장치 (장치 새로고침)</option>
+          </select>
+        </div>
+
+        <button id="btnSystemAudio" class="btn btn-source" title="macOS 시스템 오디오 또는 브라우저 탭 오디오 직접 캡처">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <rect x="2" y="3" width="20" height="14" rx="2" ry="2"/>
+            <line x1="8" y1="21" x2="16" y2="21"/>
+            <line x1="12" y1="17" x2="12" y2="21"/>
+          </svg>
+          <span>시스템/화면 오디오 캡처</span>
+        </button>
+
+        <label for="fileInput" class="btn btn-source file-btn" title="WAV, MP3, FLAC, AAC, OGG 파일 드래그 앤 드롭 또는 선택">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+            <polyline points="14 2 14 8 20 8"/>
+          </svg>
+          <span>오디오 파일 열기</span>
+          <input id="fileInput" type="file" accept="audio/*,.wav,.mp3,.flac,.ogg,.m4a,.aac,.aiff" hidden />
+        </label>
+
+        <button id="btnTestTone" class="btn btn-ghost" title="-14.0 LUFS 기준 정현파 테스트 신호 재생">
+          <span>-14 LUFS 보정 톤</span>
+        </button>
+      </div>
+
+      <!-- Preset & Window Actions -->
+      <div class="action-controls">
+        <div class="preset-wrapper">
+          <span class="control-label">TARGET</span>
+          <select id="presetSelect" class="select-preset" title="스트리밍 및 방송 라우드니스 타겟 프리셋">
+            <option value="spotify">Spotify (-14 LUFS / -1.0 dBTP)</option>
+            <option value="youtube">YouTube (-14 LUFS / -1.0 dBTP)</option>
+            <option value="apple">Apple Music (-16 LUFS / -1.0 dBTP)</option>
+            <option value="tidal">Tidal / Amazon (-14 LUFS / -1.0 dBTP)</option>
+            <option value="ebu">EBU R128 Broadcast (-23 LUFS / -1.0 dBTP)</option>
+            <option value="atsc">ATSC A/85 US TV (-24 LKFS / -2.0 dBTP)</option>
+            <option value="netflix">Netflix (-27 LKFS / -2.0 dBTP)</option>
+            <option value="podcast">Podcast Stereo (-16 LUFS / -1.0 dBTP)</option>
+            <option value="club">Club / Loud Master (-8 LUFS / -0.3 dBTP)</option>
+          </select>
+        </div>
+
+        <button id="btnReset" class="btn btn-action" title="모든 측정값 및 그래프 초기화 (단축키: R)">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+            <polyline points="1 4 1 10 7 10"/>
+            <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/>
+          </svg>
+          <span>초기화</span>
+        </button>
+
+        <button id="btnMiniMode" class="btn btn-action" title="컴팩트 미니 미터 레이아웃 전환 (단축키: M)">
+          <span>미니 모드</span>
+        </button>
+
+        <button id="btnPiP" class="btn btn-action btn-pip" title="항상 위(Always on Top) 독립 미니 미터 창 띄우기">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <rect x="3" y="3" width="18" height="18" rx="2"/>
+            <rect x="11" y="11" width="8" height="8" rx="1" fill="currentColor"/>
+          </svg>
+          <span>항상 위(PiP)</span>
+        </button>
+
+        <button id="btnExport" class="btn btn-action" title="현재 측정 리포트 JSON 내보내기">
+          <span>리포트 저장</span>
+        </button>
+
+        <button id="btnInstallPWA" class="btn btn-action btn-install hidden" title="이 웹 앱을 독(Dock)이나 바탕화면/홈 화면에 스탠드얼론 앱으로 설치">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+            <polyline points="7 10 12 15 17 10"/>
+            <line x1="12" y1="15" x2="12" y2="3"/>
+          </svg>
+          <span>앱 설치</span>
+        </button>
+      </div>
+    </header>
+
+    <!-- Main 3-Column Youlean-Style Workspace -->
+    <main id="meterContainer" class="workspace">
+      <!-- LEFT COLUMN: Numeric Readouts -->
+      <section class="readouts-panel">
+        <!-- Integrated Loudness (Hero Readout) -->
+        <div class="metric-card hero-card" id="cardIntegrated">
+          <div class="metric-header">
+            <span class="metric-title">INTEGRATED</span>
+            <span class="metric-unit">LUFS</span>
+          </div>
+          <div class="metric-value-large" id="valIntegrated">-∞</div>
+          <div class="metric-subrow">
+            <span class="sub-label">TARGET <strong id="lblTargetLUFS">-14.0</strong></span>
+            <span class="delta-pill" id="valTargetDelta">Δ -- LU</span>
+          </div>
+        </div>
+
+        <!-- Short-Term Loudness (3s) -->
+        <div class="metric-card">
+          <div class="metric-header">
+            <span class="metric-title">SHORT-TERM <small>(3s)</small></span>
+            <span class="metric-unit">LUFS</span>
+          </div>
+          <div class="metric-value-mid" id="valShortTerm">-∞</div>
+          <div class="metric-subrow">
+            <span class="sub-label">MAX SHORT-TERM</span>
+            <span class="sub-val" id="valShortTermMax">-∞ LUFS</span>
+          </div>
+        </div>
+
+        <!-- Momentary Loudness (400ms) -->
+        <div class="metric-card">
+          <div class="metric-header">
+            <span class="metric-title">MOMENTARY <small>(400ms)</small></span>
+            <span class="metric-unit">LUFS</span>
+          </div>
+          <div class="metric-value-mid" id="valMomentary">-∞</div>
+          <div class="metric-subrow">
+            <span class="sub-label">MAX MOMENTARY</span>
+            <span class="sub-val" id="valMomentaryMax">-∞ LUFS</span>
+          </div>
+        </div>
+
+        <!-- Dual Grid: LRA + PLR -->
+        <div class="metric-grid-2">
+          <div class="metric-card compact-card">
+            <div class="metric-header">
+              <span class="metric-title" title="Loudness Range (EBU Tech 3342)">LRA</span>
+              <span class="metric-unit">LU</span>
+            </div>
+            <div class="metric-value-sm" id="valLRA">0.0</div>
+            <div class="metric-subrow">
+              <span class="sub-label">DYNAMICS</span>
+              <span class="sub-val" id="valDynamicsTag">--</span>
+            </div>
+          </div>
+
+          <div class="metric-card compact-card">
+            <div class="metric-header">
+              <span class="metric-title" title="Peak to Loudness Ratio (True Peak Max - Integrated)">PLR / CREST</span>
+              <span class="metric-unit">LU</span>
+            </div>
+            <div class="metric-value-sm" id="valPLR">--</div>
+            <div class="metric-subrow">
+              <span class="sub-label">SAMPLE PK</span>
+              <span class="sub-val" id="valSamplePeak">-∞ dBFS</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- True Peak Max (4x Oversampled) -->
+        <div class="metric-card tp-card" id="cardTruePeak">
+          <div class="metric-header">
+            <span class="metric-title">TRUE PEAK MAX <small>(4x OS)</small></span>
+            <span class="metric-unit">dBTP</span>
+          </div>
+          <div class="tp-main-row">
+            <div class="metric-value-mid" id="valTruePeakMax">-∞</div>
+            <div class="clip-indicator" id="clipBadge">SAFE</div>
+          </div>
+          <div class="metric-subrow">
+            <span class="sub-label">L / R CURRENT</span>
+            <span class="sub-val"><span id="valTPL">-∞</span> / <span id="valTPR">-∞</span> dBTP</span>
+          </div>
+          <div class="metric-subrow">
+            <span class="sub-label">CEILING <strong id="lblCeilingTP">-1.0 dBTP</strong></span>
+            <span class="sub-val" id="valClipCount">0 clips</span>
+          </div>
+        </div>
+
+        <!-- Streaming Normalization Verdict Box -->
+        <div class="verdict-card" id="verdictCard">
+          <div class="verdict-header">
+            <span id="verdictPresetName">Spotify</span> 라우드니스 진단
+          </div>
+          <div class="verdict-body" id="verdictText">
+            오디오를 재생하거나 파일을 드롭하면 스트리밍 노멀라이제이션 게인 변화를 계산합니다.
+          </div>
+        </div>
+      </section>
+
+      <!-- CENTER COLUMN: Loudness Time-Series Graph & File Player -->
+      <section class="graph-panel" id="dropZone">
+        <!-- Graph Header Bar -->
+        <div class="graph-toolbar">
+          <div class="graph-legend">
+            <span class="legend-item"><i class="dot dot-st"></i>Short-Term (3s)</span>
+            <span class="legend-item"><i class="dot dot-m"></i>Momentary (400ms)</span>
+            <span class="legend-item"><i class="dot dot-int"></i>Integrated</span>
+            <span class="legend-item"><i class="dot dot-target"></i>Target (<span id="graphTargetLabel">-14</span> LUFS)</span>
+            <span class="legend-item"><i class="dot dot-tp"></i>True Peak Warn</span>
+          </div>
+
+          <div class="graph-controls">
+            <span class="control-label">TIME WINDOW</span>
+            <div class="segmented-btns" id="windowSelector">
+              <button class="seg-btn" data-sec="30">30s</button>
+              <button class="seg-btn active" data-sec="60">1m</button>
+              <button class="seg-btn" data-sec="300">5m</button>
+              <button class="seg-btn" data-sec="0" id="btnFullFileWindow">전체(Full)</button>
+            </div>
+            <button id="btnPauseGraph" class="btn-tiny" title="그래프 일시정지 / 재개">일시정지</button>
+          </div>
+        </div>
+
+        <!-- Main Canvas Wrapper -->
+        <div class="canvas-container">
+          <canvas id="historyCanvas"></canvas>
+
+          <!-- Drag & Drop Overlay -->
+          <div id="dropOverlay" class="drop-overlay hidden">
+            <div class="drop-box">
+              <svg width="42" height="42" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                <polyline points="17 8 12 3 7 8"/>
+                <line x1="12" y1="3" x2="12" y2="15"/>
+              </svg>
+              <h3>오디오 파일을 여기에 놓으세요</h3>
+              <p>WAV, MP3, FLAC, M4A, OGG — 초고속 오프라인 전체 분석 및 실시간 재생</p>
+            </div>
+          </div>
+        </div>
+
+        <!-- Bottom File Transport & Metadata Bar -->
+        <div class="transport-bar" id="transportBar">
+          <div class="transport-left">
+            <button id="btnPlayPause" class="btn-transport" disabled title="재생 / 일시정지 (Space)">
+              <svg id="iconPlay" width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+                <polygon points="5 3 19 12 5 21 5 3"/>
+              </svg>
+            </button>
+            <button id="btnStopFile" class="btn-transport" disabled title="정지 및 처음으로">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor">
+                <rect x="4" y="4" width="16" height="16"/>
+              </svg>
+            </button>
+            <span class="time-readout">
+              <span id="curTime">00:00.0</span> / <span id="totTime">00:00.0</span>
+            </span>
+          </div>
+
+          <div class="transport-scrubber">
+            <input id="seekSlider" type="range" min="0" max="1000" value="0" disabled />
+          </div>
+
+          <div class="transport-meta" id="fileMetaInfo">
+            파일을 드래그 앤 드롭하거나 상단에서 입력 소스를 선택하세요
+          </div>
+        </div>
+      </section>
+
+      <!-- RIGHT COLUMN: Vertical Bar Meters (LUFS + True Peak L/R) -->
+      <section class="bars-panel">
+        <div class="bars-header">
+          <span>LUFS</span>
+          <span>TP L/R</span>
+        </div>
+        <div class="bars-canvas-wrap">
+          <canvas id="barMeterCanvas"></canvas>
+        </div>
+        <div class="bars-footer">
+          <div class="bar-footer-val" id="barFooterLUFS">-∞</div>
+          <div class="bar-footer-val" id="barFooterTP">-∞</div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script src="./dsp.js"></script>
+  <script src="./app.js"></script>
+</body>
+</html>
