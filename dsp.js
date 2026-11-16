@@ -169,6 +169,55 @@ class LoudnessMeterEngine {
     this.totalSamplesProcessed = 0;
   }
 
+  /**
+   * Reset a single specific metric and immediately begin re-measuring it
+   */
+  resetMetric(metricKey) {
+    switch (metricKey) {
+      case 'shortTerm':
+        this.subBlockRing.fill(0);
+        this.subBlockCount = 0;
+        this.subBlockWriteIdx = 0;
+        this.shortTermLUFS = -Infinity;
+        break;
+      case 'integrated':
+        this.momentaryEnergies = [];
+        this.integratedLUFS = -Infinity;
+        break;
+      case 'lra':
+        this.shortTermEnergies = [];
+        this.lra = 0.0;
+        break;
+      case 'psr':
+        this.psrPeakLinear = 0;
+        this.psrLU = -Infinity;
+        break;
+      case 'plr':
+        this.maxTruePeak = 0;
+        this.maxTruePeakCh.fill(0);
+        this.momentaryEnergies = [];
+        this.integratedLUFS = -Infinity;
+        break;
+      case 'momentaryMax':
+        this.momentaryMaxLUFS = isFinite(this.momentaryLUFS) ? this.momentaryLUFS : -Infinity;
+        break;
+      case 'shortTermMax':
+        this.shortTermMaxLUFS = isFinite(this.shortTermLUFS) ? this.shortTermLUFS : -Infinity;
+        break;
+      case 'truePeakMax':
+        this.maxTruePeak = 0;
+        this.maxSamplePeak = 0;
+        this.maxTruePeakCh.fill(0);
+        this.clipCount = 0;
+        break;
+      case 'phase':
+        this.minCorrelation = this.correlation;
+        break;
+      default:
+        break;
+    }
+  }
+
   process(channelBuffers) {
     const numCh = Math.min(channelBuffers.length, this.numChannels);
     if (numCh === 0) return;

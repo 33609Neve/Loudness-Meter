@@ -73,6 +73,7 @@ const slots = {
     analysis: null,
     histogram: new Float64Array(HIST_BINS),
     pauseOffsetSec: 0,
+    metricStartSec: {},
   },
   B: {
     audioBuffer: null,
@@ -80,6 +81,7 @@ const slots = {
     analysis: null,
     histogram: new Float64Array(HIST_BINS),
     pauseOffsetSec: 0,
+    metricStartSec: {},
   },
 };
 
@@ -637,6 +639,7 @@ async function handleFileLoad(file) {
     slot.audioBuffer = audioBuffer;
     slot.fileName = file.name;
     slot.pauseOffsetSec = 0;
+    slot.metricStartSec = {};
 
     slot.analysis = analyzeAudioBufferOffline(audioBuffer);
     slot.histogram.fill(0);
@@ -825,15 +828,87 @@ function setStatus(mode, label) {
   if (elStatusText) elStatusText.textContent = label;
 }
 
+function computeWindowedFileMetrics(tl, fromSec, toSec, fallbackSummary) {
+  const slice = tl.filter((pt) => pt.timeSec >= fromSec && pt.timeSec <= Math.max(fromSec + 0.05, toSec));
+  if (slice.length === 0) {
+    return {
+      integrated: -Infinity,
+      lra: 0.0,
+      plr: -Infinity,
+      momentaryMax: -Infinity,
+      shortTermMax: -Infinity,
+      maxTruePeak: -Infinity,
+      minCorrelation: 1.0,
+    };
+  }
+
+  let momMax = -Infinity;
+  let stMax = -Infinity;
+  let tpMax = -Infinity;
+  let minCorr = 1.0;
+  const energies = [];
+  const stValues = [];
+
+  for (const pt of slice) {
+    if (isFinite(pt.momentary) && pt.momentary > momMax) momMax = pt.momentary;
+    if (isFinite(pt.shortTerm) && pt.shortTerm > stMax) stMax = pt.shortTerm;
+    const pk = Math.max(pt.truePeakL, pt.truePeakR);
+    if (isFinite(pk) && pk > tpMax) tpMax = pk;
+    if (isFinite(pt.correlation) && pt.correlation < minCorr) minCorr = pt.correlation;
+
+    if (isFinite(pt.momentary) && pt.momentary > -70) {
+      energies.push(Math.pow(10, (pt.momentary + 0.691) / 10));
+    }
+    if (isFinite(pt.shortTerm) && pt.shortTerm > -70) {
+      stValues.push(pt.shortTerm);
+    }
+  }
+
+  // Gated Integrated over [fromSec, toSec]
+  let integrated = -Infinity;
+  if (energies.length > 0) {
+    const absMean = energies.reduce((a, b) => a + b, 0) / energies.length;
+    const relGate = absMean * 0.1;
+    const gated = energies.filter((e) => e >= relGate);
+    if (gated.length > 0) {
+      const gatedMean = gated.reduce((a, b) => a + b, 0) / gated.length;
+      integrated = -0.691 + 10 * Math.log10(gatedMean);
+    }
+  }
+
+  // LRA over [fromSec, toSec]
+  let lra = 0.0;
+  if (stValues.length >= 4) {
+    stValues.sort((a, b) => a - b);
+    const p10 = stValues[Math.floor((stValues.length - 1) * 0.1)];
+    const p95 = stValues[Math.floor((stValues.length - 1) * 0.95)];
+    lra = Math.max(0, p95 - p10);
+  }
+
+  const plr = isFinite(tpMax) && isFinite(integrated) ? Math.max(0, tpMax - integrated) : -Infinity;
+
+  return {
+    integrated,
+    lra,
+    plr,
+    momentaryMax: momMax,
+    shortTermMax: stMax,
+    maxTruePeak: tpMax,
+    minCorrelation: minCorr,
+  };
+}
+
 function getActiveSnapshot() {
   const slot = getSlot();
   if (currentMode === 'file' && slot.analysis) {
     const summary = slot.analysis.summary;
     const tl = slot.analysis.timeline;
     const playSec = getFilePlayheadSec();
+    const starts = slot.metricStartSec || {};
+    const hasCustomStarts = Object.keys(starts).length > 0;
 
-    // Interpolate from the pre-analyzed timeline whenever playing OR seeked to a position
-    if ((fileIsPlaying || playSec > 0.01) && tl && tl.length > 0) {
+    // Interpolate from the pre-analyzed timeline whenever playing, seeked, or re-measuring a metric
+    if ((fileIsPlaying || playSec > 0.01 || hasCustomStarts) && tl && tl.length > 0) {
       const rawIdx = (playSec / Math.max(0.01, slot.analysis.durationSec)) * (tl.length - 1);
       const idx0 = Math.max(0, Math.min(tl.length - 1, Math.floor(rawIdx)));
       const idx1 = Math.min(tl.length - 1, idx0 + 1);
@@ -847,7 +922,7 @@ function getActiveSnapshot() {
         return a + (b - a) * frac;
       };
 
-      return {
+      const snap = {
         ...summary,
         momentary: interp(p0.momentary, p1.momentary),
         shortTerm: interp(p0.shortTerm, p1.shortTerm),
@@ -856,6 +931,24 @@ function getActiveSnapshot() {
         psr: interp(p0.psr, p1.psr),
         correlation: monoCheckEnabled ? 1.0 : interp(p0.correlation ?? 1, p1.correlation ?? 1),
       };
+
+      // Override any individually reset metrics with windowed calculation from their reset point to playSec
+      for (const [mKey, startSec] of Object.entries(starts)) {
+        if (startSec === null || startSec === undefined) continue;
+        if (playSec < startSec) {
+          slot.metricStartSec[mKey] = playSec;
+        }
+        const win = computeWindowedFileMetrics(tl, slot.metricStartSec[mKey], playSec, summary);
+        if (mKey === 'integrated') snap.integrated = win.integrated;
+        else if (mKey === 'lra') snap.lra = win.lra;
+        else if (mKey === 'plr') snap.plr = win.plr;
+        else if (mKey === 'momentaryMax') snap.momentaryMax = win.momentaryMax;
+        else if (mKey === 'shortTermMax') snap.shortTermMax = win.shortTermMax;
+        else if (mKey === 'truePeakMax') snap.maxTruePeak = win.maxTruePeak;
+        else if (mKey === 'phase') snap.minCorrelation = win.minCorrelation;
+      }
+
+      return snap;
     }
     return summary;
   }
@@ -1841,6 +1934,47 @@ presetSelect.addEventListener('change', (e) => {
   if (inpCustomCeiling && p) inpCustomCeiling.value = p.maxTruePeak.toFixed(1);
   lastReadoutUpdateTime = 0;
   applyRealtimePlaybackRouting();
+});
+
+function resetSingleMetric(metricKey, el) {
+  if (!metricKey) return;
+
+  // Visual click-flash feedback
+  if (el) {
+    el.classList.add('metric-reset-flash');
+    setTimeout(() => el.classList.remove('metric-reset-flash'), 160);
+  }
+
+  // 1. Reset ballistic display state for that metric immediately
+  if (metricKey === 'shortTerm') ballistics.shortTerm = -58;
+  else if (metricKey === 'integrated') ballistics.integrated = -Infinity;
+  else if (metricKey === 'lra') ballistics.lra = 0;
+  else if (metricKey === 'psr') ballistics.psr = -Infinity;
+  else if (metricKey === 'plr') ballistics.plr = -Infinity;
+
+  // 2. Reset inside Live DSP engine
+  engine.resetMetric(metricKey);
+
+  // 3. In File Mode, mark this metric to re-measure starting from the current playhead
+  const slot = getSlot();
+  if (currentMode === 'file' && slot.analysis) {
+    const curSec = getFilePlayheadSec();
+    const startSec = curSec >= slot.analysis.durationSec - 0.15 ? 0 : curSec;
+    slot.metricStartSec[metricKey] = startSec;
+    // If file is currently paused, start playback so re-measurement proceeds immediately
+    if (!fileIsPlaying && slot.audioBuffer) {
+      startFilePlayback(startSec);
+    }
+  }
+
+  lastReadoutUpdateTime = 0;
+}
+
+// Click-to-reset listeners on all metric rows, pills, and phase meter
+document.querySelectorAll('[data-reset-metric]').forEach((el) => {
+  el.addEventListener('click', () => {
+    resetSingleMetric(el.dataset.resetMetric, el);
+  });
 });
 
 btnReset.addEventListener('click', resetMeters);

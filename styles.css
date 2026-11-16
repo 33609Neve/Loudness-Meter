@@ -424,6 +424,21 @@ html, body {
   background: var(--ylm-slate-highlight);
 }
 
+.ylm-clickable-metric {
+  cursor: pointer;
+  transition: filter 0.12s ease, transform 0.08s ease;
+}
+
+.ylm-clickable-metric:hover {
+  filter: brightness(1.14);
+}
+
+.ylm-clickable-metric:active,
+.ylm-clickable-metric.metric-reset-flash {
+  filter: brightness(1.38);
+  transform: scale(0.98);
+}
+
 .ylm-val {
   font-size: 23px;
   font-weight: 700;

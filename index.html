@@ -170,54 +170,54 @@
 
       <!-- COLUMN 2: Center-Left Readout Stack, 3 Pills & Phase Meter -->
       <section class="ylm-col-readouts">
-        <!-- 5-Row Slate Stack -->
+        <!-- 5-Row Slate Stack (Click any row to reset & re-measure that metric) -->
         <div class="ylm-slate-stack">
-          <div class="ylm-slate-row">
+          <div class="ylm-slate-row ylm-clickable-metric" data-reset-metric="shortTerm" title="클릭하여 Short-Term 리셋 및 재측정">
             <div class="ylm-val" id="valShortTerm">-</div>
             <div class="ylm-lbl">SHORT TERM</div>
           </div>
 
-          <div class="ylm-slate-row highlight">
+          <div class="ylm-slate-row highlight ylm-clickable-metric" data-reset-metric="integrated" title="클릭하여 Integrated LUFS 리셋 및 현재 지점부터 재측정">
             <div class="ylm-val" id="valIntegrated">-</div>
             <div class="ylm-lbl">INTEGRATED</div>
           </div>
 
-          <div class="ylm-slate-row">
+          <div class="ylm-slate-row ylm-clickable-metric" data-reset-metric="lra" title="클릭하여 Loudness Range (LRA) 리셋 및 재측정">
             <div class="ylm-val" id="valLRA">0.0 <span class="ylm-unit">LU</span></div>
             <div class="ylm-lbl">LOUDNESS RANGE</div>
           </div>
 
-          <div class="ylm-slate-row">
+          <div class="ylm-slate-row ylm-clickable-metric" data-reset-metric="psr" title="클릭하여 Dynamics (PSR) 리셋 및 재측정">
             <div class="ylm-val" id="valPSR">-</div>
             <div class="ylm-lbl">DYNAMICS (PSR)</div>
           </div>
 
-          <div class="ylm-slate-row">
+          <div class="ylm-slate-row ylm-clickable-metric" data-reset-metric="plr" title="클릭하여 Avg. Dynamics (PLR) 리셋 및 재측정">
             <div class="ylm-val" id="valPLR">-</div>
             <div class="ylm-lbl">AVG. DYNAMICS (PLR)</div>
           </div>
         </div>
 
-        <!-- 3 Rounded Pill Readouts -->
+        <!-- 3 Rounded Pill Readouts (Click any pill to reset & re-measure that Max value) -->
         <div class="ylm-pills-wrap">
-          <div class="ylm-pill-group">
+          <div class="ylm-pill-group ylm-clickable-metric" data-reset-metric="momentaryMax" title="클릭하여 Momentary Max 리셋 및 현재 지점부터 재측정">
             <div class="ylm-pill-box" id="valMomentaryMax">-</div>
             <div class="ylm-pill-lbl">MOMENTARY MAX</div>
           </div>
 
-          <div class="ylm-pill-group">
+          <div class="ylm-pill-group ylm-clickable-metric" data-reset-metric="shortTermMax" title="클릭하여 Short-Term Max 리셋 및 현재 지점부터 재측정">
             <div class="ylm-pill-box" id="valShortTermMax">-</div>
             <div class="ylm-pill-lbl">SHORT TERM MAX</div>
           </div>
 
-          <div class="ylm-pill-group">
+          <div class="ylm-pill-group ylm-clickable-metric" data-reset-metric="truePeakMax" title="클릭하여 True Peak Max 리셋 및 현재 지점부터 재측정">
             <div class="ylm-pill-box" id="valTruePeakMax">-</div>
             <div class="ylm-pill-lbl">TRUE PEAK MAX</div>
           </div>
         </div>
 
         <!-- Stereo Phase Correlation Meter (-1 .. 0 .. +1) -->
-        <div class="ylm-phase-box" title="스테레오 위상 상관도 (-1: 역위상 캔슬링 위험 ~ +1: 완벽한 모노 호환)">
+        <div class="ylm-phase-box ylm-clickable-metric" data-reset-metric="phase" title="클릭하여 최저 위상 홀드 마커 리셋 (-1: 역위상 캔슬링 위험 ~ +1: 완벽한 모노 호환)">
           <div class="ylm-phase-scale">
             <span>-1</span>
             <span id="valPhaseCorr">PHASE +1.00</span>
