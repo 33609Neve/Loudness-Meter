@@ -251,7 +251,7 @@ async function populateAudioDevices() {
 async function startLiveDeviceInput() {
   if (currentMode === 'live') {
     stopAllActiveAudio();
-    setStatus('standby', 'WEB');
+    setStatus('standby', '');
     return;
   }
 
@@ -294,7 +294,7 @@ async function startLiveDeviceInput() {
 async function startSystemAudioCapture() {
   if (currentMode === 'system') {
     stopAllActiveAudio();
-    setStatus('standby', 'WEB');
+    setStatus('standby', '');
     return;
   }
 
@@ -327,7 +327,7 @@ async function startSystemAudioCapture() {
 
     audioTracks[0].onended = () => {
       stopAllActiveAudio();
-      setStatus('standby', 'WEB');
+      setStatus('standby', '');
     };
 
     engine.setConfig(ctx.sampleRate, 2);
@@ -351,7 +351,7 @@ async function startSystemAudioCapture() {
 function toggleReferenceTone() {
   if (currentMode === 'tone') {
     stopAllActiveAudio();
-    setStatus('standby', 'WEB');
+    setStatus('standby', '');
     return;
   }
 
@@ -427,7 +427,7 @@ async function handleFileLoad(file) {
     setStatus('file', 'FILE');
   } catch (err) {
     alert(`오디오 파일을 디코딩할 수 없습니다: ${err.message}`);
-    setStatus('standby', 'WEB');
+    setStatus('standby', '');
   }
 }
 
@@ -1198,7 +1198,7 @@ function resetMeters() {
     offlineHistogram.fill(0);
     loadedAudioBuffer = null;
     loadedFileName = '';
-    setStatus('standby', 'WEB');
+    setStatus('standby', '');
     fileMetaInfo.textContent = 'READY';
   }
 }
@@ -1360,9 +1360,12 @@ if (
   (location.protocol === 'https:' || location.hostname === 'localhost' || location.hostname === '127.0.0.1')
 ) {
   window.addEventListener('load', () => {
-    navigator.serviceWorker.register('./sw.js').catch((err) => {
-      console.warn('ServiceWorker registration failed:', err);
-    });
+    navigator.serviceWorker
+      .register('./sw.js')
+      .then((reg) => reg.update())
+      .catch((err) => {
+        console.warn('ServiceWorker registration failed:', err);
+      });
   });
 }
 
