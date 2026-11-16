@@ -5,7 +5,7 @@
  * - 4x Oversampled True Peak Detector (ITU-R BS.1770-4 4-phase 12-tap FIR interpolation)
  * - Momentary (400ms), Short-Term (3000ms), Integrated (Gated -70 LUFS abs / -10 LU rel)
  * - Loudness Range (LRA - EBU Tech 3342: -70 LUFS abs / -20 LU rel, 10th to 95th percentile)
- * - Fast Offline File Analyzer for instant full-track loudness profile
+ * - True 3-second windowed PSR (Peak to Short-Term Loudness Ratio) & PLR
  */
 
 (function (global) {
@@ -22,10 +22,6 @@ const STREAMING_PRESETS = {
   club: { name: 'Club / Loud Master', targetLUFS: -8.0, maxTruePeak: -0.3, tolerance: 1.5, category: 'Mastering' },
 };
 
-/**
- * Compute K-Weighting Biquad Filter Coefficients for any sample rate
- * Based on ITU-R BS.1770-4 analytical bilinear transform definitions
- */
 function computeKWeightingCoeffs(sampleRate) {
   // Stage 1: High-shelf pre-filter (acoustic effects of the head)
   const db = 3.999843853973347;
@@ -60,29 +56,22 @@ function computeKWeightingCoeffs(sampleRate) {
   return { stage1, stage2 };
 }
 
-/**
- * ITU-R BS.1770-4 Table 3: 48-tap 4-phase FIR filter coefficients for 4x True Peak oversampling
- */
 const TRUE_PEAK_PHASES = [
-  // Phase 0
   new Float64Array([
     0.001708984375, 0.010986328125, -0.0196533203125, 0.033203125,
     -0.0594482421875, 0.1373291015625, 0.97216796875, -0.102294921875,
     0.047607421875, -0.026611328125, 0.014892578125, -0.00830078125,
   ]),
-  // Phase 1
   new Float64Array([
     -0.0291748046875, 0.029296875, -0.0517578125, 0.089111328125,
     -0.16650390625, 0.465087890625, 0.77978515625, -0.2003173828125,
     0.0908203125, -0.0491943359375, 0.026123046875, -0.0125732421875,
   ]),
-  // Phase 2
   new Float64Array([
     -0.0189208984375, 0.0330810546875, -0.0582275390625, 0.1015625,
     -0.2003173828125, 0.77978515625, 0.465087890625, -0.16650390625,
     0.089111328125, -0.0517578125, 0.029296875, -0.0291748046875,
   ]),
-  // Phase 3
   new Float64Array([
     -0.00830078125, 0.014892578125, -0.026611328125, 0.047607421875,
     -0.102294921875, 0.97216796875, 0.1373291015625, -0.0594482421875,
@@ -92,17 +81,14 @@ const TRUE_PEAK_PHASES = [
 
 class ChannelState {
   constructor() {
-    // Stage 1 biquad state
     this.s1_x1 = 0;
     this.s1_x2 = 0;
     this.s1_y1 = 0;
     this.s1_y2 = 0;
-    // Stage 2 biquad state
     this.s2_x1 = 0;
     this.s2_x2 = 0;
     this.s2_y1 = 0;
     this.s2_y2 = 0;
-    // 12-sample FIR delay line for 4x True Peak interpolation
     this.tpHistory = new Float64Array(12);
     this.tpIndex = 0;
   }
@@ -115,6 +101,12 @@ class ChannelState {
   }
 }
 
+// Use 50ms sub-blocks (20 Hz internal resolution):
+// Momentary (400ms) = 8 sub-blocks, Short-Term (3000ms) = 60 sub-blocks
+const SUB_BLOCKS_PER_SEC = 20;
+const MOMENTARY_SUB_BLOCKS = 8;   // 400 ms
+const SHORT_TERM_SUB_BLOCKS = 60; // 3000 ms
+
 class LoudnessMeterEngine {
   constructor(sampleRate = 48000, numChannels = 2) {
     this.setConfig(sampleRate, numChannels);
@@ -126,8 +118,8 @@ class LoudnessMeterEngine {
     this.coeffs = computeKWeightingCoeffs(sampleRate);
     this.channels = Array.from({ length: this.numChannels }, () => new ChannelState());
 
-    // 100ms sub-block length (10 Hz step per BS.1770-4)
-    this.subBlockSize = Math.max(1, Math.round(sampleRate * 0.1));
+    // 50ms sub-block length (20 Hz step for ultra-smooth sliding windows)
+    this.subBlockSize = Math.max(1, Math.round(sampleRate / SUB_BLOCKS_PER_SEC));
     this.reset();
   }
 
@@ -136,16 +128,16 @@ class LoudnessMeterEngine {
 
     this.currentSubBlockSamples = 0;
     this.currentSubBlockEnergy = new Float64Array(this.numChannels);
+    this.currentSubBlockPeak = 0;
 
-    // Circular buffer of recent 30 sub-blocks (3.0 seconds) of mean-square energy
-    this.subBlockRing = new Float64Array(30);
+    // Circular buffer of recent 60 sub-blocks (3.0 seconds) of mean-square energy
+    this.subBlockRing = new Float64Array(SHORT_TERM_SUB_BLOCKS);
     this.subBlockCount = 0;
     this.subBlockWriteIdx = 0;
+    this.psrPeakLinear = 0;
 
-    // Gating & LRA history
-    // Each 400ms block (every 100ms after first 400ms) stores combined energy z_j
+    // Gating & LRA history (sampled every 100ms = every 2 sub-blocks per BS.1770-4 / Tech 3342)
     this.momentaryEnergies = [];
-    // Each 3000ms block (every 100ms after first 3.0s) stores combined energy for LRA
     this.shortTermEnergies = [];
 
     // Live readout values
@@ -155,6 +147,7 @@ class LoudnessMeterEngine {
     this.shortTermMaxLUFS = -Infinity;
     this.integratedLUFS = -Infinity;
     this.lra = 0.0;
+    this.psrLU = -Infinity;
 
     // Peaks (linear amplitude, converted to dB on read)
     this.samplePeakCh = new Float64Array(this.numChannels);
@@ -172,14 +165,11 @@ class LoudnessMeterEngine {
     this._corrSumLL = 0;
     this._corrSumRR = 0;
 
-    // Cached gated calculation throttling
+    this.subBlocksTotal = 0;
     this.blocksSinceGateUpdate = 0;
     this.totalSamplesProcessed = 0;
   }
 
-  /**
-   * Process a chunk of audio channels: Array of Float32Array [left, right]
-   */
   process(channelBuffers) {
     const numCh = Math.min(channelBuffers.length, this.numChannels);
     if (numCh === 0) return;
@@ -188,7 +178,6 @@ class LoudnessMeterEngine {
 
     const { stage1, stage2 } = this.coeffs;
 
-    // Per-block instantaneous peaks & phase correlation accumulators
     const blockSamplePeak = new Float64Array(this.numChannels);
     const blockTruePeak = new Float64Array(this.numChannels);
     let chunkLR = 0;
@@ -213,9 +202,8 @@ class LoudnessMeterEngine {
 
         // 2. 4x Oversampled True Peak
         state.tpHistory[state.tpIndex] = x;
-        // Fast check: only run full 4-phase convolution when signal is significant (> -40 dBFS) or near current block peak
+        let sampleTP = absX;
         if (absX > 0.01 || absX >= blockTruePeak[ch] * 0.5) {
-          let maxPhaseAmp = absX;
           for (let p = 0; p < 4; p++) {
             const taps = TRUE_PEAK_PHASES[p];
             let acc = 0;
@@ -225,15 +213,14 @@ class LoudnessMeterEngine {
               idx = idx === 0 ? 11 : idx - 1;
             }
             const absAcc = Math.abs(acc);
-            if (absAcc > maxPhaseAmp) maxPhaseAmp = absAcc;
+            if (absAcc > sampleTP) sampleTP = absAcc;
           }
-          if (maxPhaseAmp > blockTruePeak[ch]) blockTruePeak[ch] = maxPhaseAmp;
-          if (maxPhaseAmp > this.maxTruePeakCh[ch]) this.maxTruePeakCh[ch] = maxPhaseAmp;
-          if (maxPhaseAmp > this.maxTruePeak) this.maxTruePeak = maxPhaseAmp;
-          if (maxPhaseAmp > 1.0) this.clipCount++;
-        } else {
-          if (absX > blockTruePeak[ch]) blockTruePeak[ch] = absX;
+          if (sampleTP > this.maxTruePeakCh[ch]) this.maxTruePeakCh[ch] = sampleTP;
+          if (sampleTP > this.maxTruePeak) this.maxTruePeak = sampleTP;
+          if (sampleTP > 1.0) this.clipCount++;
         }
+        if (sampleTP > blockTruePeak[ch]) blockTruePeak[ch] = sampleTP;
+        if (sampleTP > this.currentSubBlockPeak) this.currentSubBlockPeak = sampleTP;
         state.tpIndex = (state.tpIndex + 1) % 12;
 
         // 3. K-Weighting Stage 1 (High-Shelf)
@@ -263,7 +250,6 @@ class LoudnessMeterEngine {
         this.currentSubBlockEnergy[ch] += y2 * y2;
       }
 
-      // If input is mono but engine is stereo, duplicate Ch0 into Ch1
       if (numCh === 1 && this.numChannels === 2) {
         blockSamplePeak[1] = blockSamplePeak[0];
         blockTruePeak[1] = blockTruePeak[0];
@@ -279,85 +265,116 @@ class LoudnessMeterEngine {
       }
     }
 
-    // Smooth decay for instantaneous bar meters
+    // Smooth decay for instantaneous peak bar meters
     for (let ch = 0; ch < this.numChannels; ch++) {
-      this.samplePeakCh[ch] = Math.max(blockSamplePeak[ch], this.samplePeakCh[ch] * 0.86);
-      this.truePeakCh[ch] = Math.max(blockTruePeak[ch], this.truePeakCh[ch] * 0.86);
+      this.samplePeakCh[ch] = Math.max(blockSamplePeak[ch], this.samplePeakCh[ch] * 0.92);
+      this.truePeakCh[ch] = Math.max(blockTruePeak[ch], this.truePeakCh[ch] * 0.92);
     }
 
-    // Update Stereo Phase Correlation & Balance with exponential smoothing
-    this._corrSumLR = this._corrSumLR * 0.78 + chunkLR * 0.22;
-    this._corrSumLL = this._corrSumLL * 0.78 + chunkLL * 0.22;
-    this._corrSumRR = this._corrSumRR * 0.78 + chunkRR * 0.22;
+    // Smooth Stereo Phase Correlation (long enough window to prevent twitching)
+    this._corrSumLR = this._corrSumLR * 0.9 + chunkLR * 0.1;
+    this._corrSumLL = this._corrSumLL * 0.9 + chunkLL * 0.1;
+    this._corrSumRR = this._corrSumRR * 0.9 + chunkRR * 0.1;
     const denom = Math.sqrt(this._corrSumLL * this._corrSumRR);
-    if (denom > 1e-9) {
+    if (denom > 1e-8) {
       const instCorr = Math.max(-1, Math.min(1, this._corrSumLR / denom));
-      this.correlation = instCorr;
-      if (instCorr < this.minCorrelation) {
-        this.minCorrelation = instCorr;
+      this.correlation = this.correlation * 0.85 + instCorr * 0.15;
+      if (this.correlation < this.minCorrelation) {
+        this.minCorrelation = this.correlation;
       }
       const totalLR = this._corrSumLL + this._corrSumRR;
-      this.balance = totalLR > 1e-9 ? (this._corrSumRR - this._corrSumLL) / totalLR : 0;
+      this.balance = totalLR > 1e-8 ? (this._corrSumRR - this._corrSumLL) / totalLR : 0;
     }
   }
 
   _commitSubBlock() {
-    // Mean square energy across channels (G_i = 1.0 for L/R)
     let totalSubBlockMeanSquare = 0;
     for (let ch = 0; ch < this.numChannels; ch++) {
       totalSubBlockMeanSquare += this.currentSubBlockEnergy[ch] / this.currentSubBlockSamples;
       this.currentSubBlockEnergy[ch] = 0;
     }
-    // If mono (1 channel), loudness of a single full-scale sine wave in stereo vs mono:
-    // In BS.1770, mono is either routed to L+R or scaled. Standard DAW meters treat mono input as dual-mono or single channel.
     this.currentSubBlockSamples = 0;
 
     this.subBlockRing[this.subBlockWriteIdx] = totalSubBlockMeanSquare;
-    this.subBlockWriteIdx = (this.subBlockWriteIdx + 1) % 30;
-    if (this.subBlockCount < 30) this.subBlockCount++;
+    // Smooth exponential peak detector (fast attack, 3s release) so PSR never drops off a cliff
+    if (this.currentSubBlockPeak >= this.psrPeakLinear) {
+      this.psrPeakLinear = this.psrPeakLinear * 0.3 + this.currentSubBlockPeak * 0.7;
+    } else {
+      this.psrPeakLinear *= 0.975;
+    }
+    this.currentSubBlockPeak = 0;
 
-    // Momentary (400ms = last 4 sub-blocks)
-    const mCount = Math.min(4, this.subBlockCount);
+    this.subBlockWriteIdx = (this.subBlockWriteIdx + 1) % SHORT_TERM_SUB_BLOCKS;
+    if (this.subBlockCount < SHORT_TERM_SUB_BLOCKS) this.subBlockCount++;
+    this.subBlocksTotal++;
+
+    // 1. Momentary Loudness (400ms = 8 sub-blocks of 50ms)
+    const mCount = Math.min(MOMENTARY_SUB_BLOCKS, this.subBlockCount);
     let mEnergySum = 0;
     for (let k = 0; k < mCount; k++) {
-      const idx = (this.subBlockWriteIdx - 1 - k + 30) % 30;
+      const idx = (this.subBlockWriteIdx - 1 - k + SHORT_TERM_SUB_BLOCKS) % SHORT_TERM_SUB_BLOCKS;
       mEnergySum += this.subBlockRing[idx];
     }
     const mMeanEnergy = mEnergySum / mCount;
-    this.momentaryLUFS = energyToLUFS(mMeanEnergy);
-    if (this.momentaryLUFS > this.momentaryMaxLUFS && isFinite(this.momentaryLUFS)) {
-      this.momentaryMaxLUFS = this.momentaryLUFS;
+    const rawMomLUFS = energyToLUFS(mMeanEnergy);
+    if (isFinite(rawMomLUFS)) {
+      this.momentaryLUFS = isFinite(this.momentaryLUFS)
+        ? this.momentaryLUFS * 0.65 + rawMomLUFS * 0.35
+        : rawMomLUFS;
+    } else {
+      this.momentaryLUFS = -Infinity;
+    }
+    // Only record Momentary Max once a full 400ms window is filled
+    if (this.subBlockCount >= MOMENTARY_SUB_BLOCKS && rawMomLUFS > this.momentaryMaxLUFS && isFinite(rawMomLUFS)) {
+      this.momentaryMaxLUFS = rawMomLUFS;
     }
 
-    if (this.subBlockCount >= 4) {
-      // Only store blocks above absolute gate (-70 LUFS -> energy > 10^((-70 + 0.691)/10))
+    // Per ITU-R BS.1770-4, gating blocks step every 100ms (every 2nd 50ms sub-block)
+    const is100msStep = this.subBlocksTotal % 2 === 0;
+    if (is100msStep && this.subBlockCount >= MOMENTARY_SUB_BLOCKS) {
       if (mMeanEnergy > 1.1719255e-7) {
         this.momentaryEnergies.push(mMeanEnergy);
       }
     }
 
-    // Short-term (3000ms = last 30 sub-blocks)
+    // 2. Short-Term Loudness (3000ms = 60 sub-blocks of 50ms) & Smooth PSR
     const stCount = this.subBlockCount;
     let stEnergySum = 0;
     for (let k = 0; k < stCount; k++) {
-      const idx = (this.subBlockWriteIdx - 1 - k + 30) % 30;
+      const idx = (this.subBlockWriteIdx - 1 - k + SHORT_TERM_SUB_BLOCKS) % SHORT_TERM_SUB_BLOCKS;
       stEnergySum += this.subBlockRing[idx];
     }
     const stMeanEnergy = stEnergySum / stCount;
-    this.shortTermLUFS = energyToLUFS(stMeanEnergy);
-    if (this.shortTermLUFS > this.shortTermMaxLUFS && isFinite(this.shortTermLUFS)) {
+    const rawStLUFS = energyToLUFS(stMeanEnergy);
+    if (isFinite(rawStLUFS)) {
+      this.shortTermLUFS = isFinite(this.shortTermLUFS)
+        ? this.shortTermLUFS * 0.75 + rawStLUFS * 0.25
+        : rawStLUFS;
+    } else {
+      this.shortTermLUFS = -Infinity;
+    }
+
+    // Compute smooth PSR (Short-Term Peak dBTP minus Short-Term LUFS)
+    const stWindowPeakDB = linearToDB(this.psrPeakLinear);
+    if (isFinite(stWindowPeakDB) && isFinite(this.shortTermLUFS) && this.shortTermLUFS > -70) {
+      const rawPSR = Math.max(0, stWindowPeakDB - this.shortTermLUFS);
+      this.psrLU = isFinite(this.psrLU) ? this.psrLU * 0.88 + rawPSR * 0.12 : rawPSR;
+    }
+
+    // Record Short-Term Max once a full 3.0s window (or at least 1.0s) is filled
+    if (this.subBlockCount >= 20 && this.shortTermLUFS > this.shortTermMaxLUFS && isFinite(this.shortTermLUFS)) {
       this.shortTermMaxLUFS = this.shortTermLUFS;
     }
 
-    if (this.subBlockCount >= 30) {
+    if (is100msStep && this.subBlockCount >= SHORT_TERM_SUB_BLOCKS) {
       if (stMeanEnergy > 1.1719255e-7) {
         this.shortTermEnergies.push(stMeanEnergy);
       }
     }
 
-    // Update Integrated LUFS and LRA every 200ms (2 sub-blocks)
+    // Update Integrated LUFS and LRA every 200ms (4 sub-blocks)
     this.blocksSinceGateUpdate++;
-    if (this.blocksSinceGateUpdate >= 2) {
+    if (this.blocksSinceGateUpdate >= 4) {
       this.blocksSinceGateUpdate = 0;
       this._updateIntegratedAndLRA();
     }
@@ -368,11 +385,9 @@ class LoudnessMeterEngine {
     const mBlocks = this.momentaryEnergies;
     const nM = mBlocks.length;
     if (nM > 0) {
-      // All entries in mBlocks already passed the -70 LUFS absolute gate (1.1719255e-7)
       let absSum = 0;
       for (let i = 0; i < nM; i++) absSum += mBlocks[i];
       const gammaAbsMean = absSum / nM;
-      // Relative threshold is -10 LU below absolute-gated mean -> multiply energy by 0.1
       const relThresholdEnergy = gammaAbsMean * 0.1;
 
       let relSum = 0;
@@ -391,11 +406,10 @@ class LoudnessMeterEngine {
     // 2. Loudness Range (LRA - EBU Tech 3342)
     const stBlocks = this.shortTermEnergies;
     const nST = stBlocks.length;
-    if (nST >= 2) {
+    if (nST >= 5) {
       let stAbsSum = 0;
       for (let i = 0; i < nST; i++) stAbsSum += stBlocks[i];
       const stAbsMean = stAbsSum / nST;
-      // Relative gate for LRA is -20 LU -> energy * 0.01
       const lraRelThreshold = stAbsMean * 0.01;
 
       const gatedLufs = [];
@@ -405,11 +419,12 @@ class LoudnessMeterEngine {
         }
       }
 
-      if (gatedLufs.length >= 2) {
+      if (gatedLufs.length >= 5) {
         gatedLufs.sort((a, b) => a - b);
         const p10Idx = Math.floor((gatedLufs.length - 1) * 0.1);
         const p95Idx = Math.floor((gatedLufs.length - 1) * 0.95);
-        this.lra = Math.max(0, gatedLufs[p95Idx] - gatedLufs[p10Idx]);
+        const rawLra = Math.max(0, gatedLufs[p95Idx] - gatedLufs[p10Idx]);
+        this.lra = this.lra === 0 ? rawLra : this.lra * 0.8 + rawLra * 0.2;
       }
     }
   }
@@ -421,12 +436,7 @@ class LoudnessMeterEngine {
     const maxSpDB = linearToDB(this.maxSamplePeak);
     const plr =
       isFinite(maxTpDB) && isFinite(this.integratedLUFS)
-        ? maxTpDB - this.integratedLUFS
-        : -Infinity;
-    const currentPeakDB = Math.max(tpLeftDB, tpRightDB);
-    const psr =
-      isFinite(currentPeakDB) && isFinite(this.shortTermLUFS)
-        ? currentPeakDB - this.shortTermLUFS
+        ? Math.max(0, maxTpDB - this.integratedLUFS)
         : -Infinity;
 
     return {
@@ -441,7 +451,7 @@ class LoudnessMeterEngine {
       maxTruePeak: maxTpDB,
       maxSamplePeak: maxSpDB,
       plr,
-      psr,
+      psr: this.psrLU,
       correlation: this.correlation,
       minCorrelation: this.minCorrelation,
       balance: this.balance,
@@ -451,11 +461,6 @@ class LoudnessMeterEngine {
   }
 }
 
-/**
- * Offline Full-File Analyzer
- * Processes an AudioBuffer and returns both summary metrics and a high-resolution timeline
- * for plotting the entire song's loudness contour immediately on file drop.
- */
 function analyzeAudioBufferOffline(audioBuffer) {
   const sampleRate = audioBuffer.sampleRate;
   const engine = new LoudnessMeterEngine(sampleRate, 2);
@@ -465,7 +470,8 @@ function analyzeAudioBufferOffline(audioBuffer) {
   const channels = [ch0, ch1];
 
   const totalSamples = audioBuffer.length;
-  const stepSamples = engine.subBlockSize; // 100ms chunks
+  // Step every 100ms (2 sub-blocks) for timeline points
+  const stepSamples = engine.subBlockSize * 2;
   const timeline = [];
 
   for (let offset = 0; offset < totalSamples; offset += stepSamples) {
@@ -481,6 +487,7 @@ function analyzeAudioBufferOffline(audioBuffer) {
       integrated: snap.integrated,
       truePeakL: snap.truePeakL,
       truePeakR: snap.truePeakR,
+      psr: snap.psr,
     });
   }
 

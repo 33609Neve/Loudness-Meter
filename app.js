@@ -71,6 +71,89 @@ let filePlayStartCtxTime = 0;
 // Graph hover state
 let hoverPoint = null;
 
+// ================= 60FPS STUDIO METER BALLISTICS & DISPLAY SMOOTHING =================
+let lastTickTime = performance.now();
+let lastReadoutUpdateTime = 0;
+
+const ballistics = {
+  momentary: -58,
+  shortTerm: -58,
+  integrated: -Infinity,
+  lra: 0,
+  psr: -Infinity,
+  plr: -Infinity,
+  correlation: 1.0,
+  reset() {
+    this.momentary = -58;
+    this.shortTerm = -58;
+    this.integrated = -Infinity;
+    this.lra = 0;
+    this.psr = -Infinity;
+    this.plr = -Infinity;
+    this.correlation = 1.0;
+  },
+};
+
+function updateBallistics(snap, dt) {
+  const clampedDt = Math.min(0.1, Math.max(0.001, dt));
+
+  // Helper: damped slew-rate-limited exponential filter
+  const smoothValue = (current, target, tauUp, tauDown, maxRatePerSec) => {
+    if (!isFinite(target)) return current;
+    if (!isFinite(current)) return target;
+    const tau = target > current ? tauUp : tauDown;
+    const alpha = 1 - Math.exp(-clampedDt / tau);
+    let delta = (target - current) * alpha;
+    const maxDelta = maxRatePerSec * clampedDt;
+    if (Math.abs(delta) > maxDelta) {
+      delta = Math.sign(delta) * maxDelta;
+    }
+    return current + delta;
+  };
+
+  // 1. Momentary Bar Gauge: damped attack (220ms), smooth studio release (500ms), max 15 LU/sec slew
+  const targetMom = isFinite(snap.momentary) && snap.momentary > -58 ? snap.momentary : -58;
+  ballistics.momentary = smoothValue(ballistics.momentary, targetMom, 0.22, 0.50, 15.0);
+
+  // 2. Short-Term: calm 400ms time constant, max 8 LU/sec slew
+  if (isFinite(snap.shortTerm) && snap.shortTerm > -80) {
+    if (ballistics.shortTerm <= -57.5) {
+      ballistics.shortTerm = snap.shortTerm;
+    } else {
+      ballistics.shortTerm = smoothValue(ballistics.shortTerm, snap.shortTerm, 0.38, 0.45, 8.0);
+    }
+  } else {
+    ballistics.shortTerm = smoothValue(ballistics.shortTerm, -58, 0.45, 0.45, 10.0);
+  }
+
+  // 3. Integrated LUFS: calm 500ms time constant, max 5 LU/sec slew
+  if (isFinite(snap.integrated) && snap.integrated > -80) {
+    ballistics.integrated = smoothValue(ballistics.integrated, snap.integrated, 0.50, 0.50, 5.0);
+  } else {
+    ballistics.integrated = -Infinity;
+  }
+
+  // 4. LRA: calm 600ms time constant, max 4 LU/sec slew
+  ballistics.lra = smoothValue(ballistics.lra, snap.lra || 0, 0.60, 0.60, 4.0);
+
+  // 5. PSR & PLR: calm 550ms time constant, max 5 LU/sec slew so LU numbers never jump
+  if (isFinite(snap.psr) && snap.psr > 0) {
+    ballistics.psr = smoothValue(ballistics.psr, snap.psr, 0.55, 0.65, 5.0);
+  } else {
+    ballistics.psr = -Infinity;
+  }
+
+  if (isFinite(snap.plr) && snap.plr > 0) {
+    ballistics.plr = smoothValue(ballistics.plr, snap.plr, 0.55, 0.65, 5.0);
+  } else {
+    ballistics.plr = -Infinity;
+  }
+
+  // 6. Phase Correlation: smooth 350ms time constant
+  const targetCorr = isFinite(snap.correlation) ? snap.correlation : 1.0;
+  ballistics.correlation = smoothValue(ballistics.correlation, targetCorr, 0.35, 0.35, 1.5);
+}
+
 // ================= DOM ELEMENTS =================
 const elStatusText = document.getElementById('statusText');
 const btnLiveInput = document.getElementById('btnLiveInput');
@@ -253,6 +336,19 @@ function stopAllActiveAudio(keepFileLoaded = false) {
 
 function attachRealtimeProcessor(inputNode, passthroughToSpeakers = false) {
   const ctx = ensureAudioContext();
+  if (processorNode) {
+    try {
+      processorNode.onaudioprocess = null;
+      processorNode.disconnect();
+    } catch (_) {}
+    processorNode = null;
+  }
+  if (zeroGainNode) {
+    try {
+      zeroGainNode.disconnect();
+    } catch (_) {}
+    zeroGainNode = null;
+  }
   processorNode = ctx.createScriptProcessor(2048, 2, 2);
   zeroGainNode = ctx.createGain();
   zeroGainNode.gain.value = 0;
@@ -552,9 +648,37 @@ function startFilePlayback(offsetSec) {
       fileSourceNode.stop();
       fileSourceNode.disconnect();
     } catch (_) {}
+    fileSourceNode = null;
+  }
+  if (playbackGainNode) {
+    try {
+      playbackGainNode.disconnect();
+    } catch (_) {}
+    playbackGainNode = null;
+  }
+  if (monoSumNode) {
+    try {
+      monoSumNode.disconnect();
+    } catch (_) {}
+    monoSumNode = null;
+  }
+  if (processorNode) {
+    try {
+      processorNode.onaudioprocess = null;
+      processorNode.disconnect();
+    } catch (_) {}
+    processorNode = null;
+  }
+  if (zeroGainNode) {
+    try {
+      zeroGainNode.disconnect();
+    } catch (_) {}
+    zeroGainNode = null;
   }
 
   const startOffset = offsetSec !== undefined ? offsetSec : slot.pauseOffsetSec;
+  const clampedOffset = Math.max(0, Math.min(startOffset, slot.audioBuffer.duration - 0.05));
+
   fileSourceNode = ctx.createBufferSource();
   fileSourceNode.buffer = slot.audioBuffer;
 
@@ -562,25 +686,6 @@ function startFilePlayback(offsetSec) {
   playbackGainNode = ctx.createGain();
   const gainDB = normPreviewEnabled ? computeNormalizationGainDB(slot.analysis?.summary) : 0;
   playbackGainNode.gain.value = Math.pow(10, gainDB / 20);
-
-  // Live DSP engine feed (pre-normalization so meters show true track levels, or post-mono)
-  engine.setConfig(slot.audioBuffer.sampleRate, 2);
-  processorNode = ctx.createScriptProcessor(2048, 2, 2);
-  zeroGainNode = ctx.createGain();
-  zeroGainNode.gain.value = 0;
-
-  processorNode.onaudioprocess = (e) => {
-    const inBuf = e.inputBuffer;
-    const ch0 = inBuf.getChannelData(0);
-    const ch1 = inBuf.numberOfChannels > 1 ? inBuf.getChannelData(1) : ch0;
-    if (monoCheckEnabled) {
-      const mono = new Float32Array(ch0.length);
-      for (let i = 0; i < ch0.length; i++) mono[i] = 0.5 * (ch0[i] + ch1[i]);
-      engine.process([mono, mono]);
-    } else {
-      engine.process([ch0, ch1]);
-    }
-  };
 
   fileSourceNode.connect(playbackGainNode);
 
@@ -606,11 +711,6 @@ function startFilePlayback(offsetSec) {
     playbackGainNode.connect(ctx.destination);
   }
 
-  fileSourceNode.connect(processorNode);
-  processorNode.connect(zeroGainNode);
-  zeroGainNode.connect(ctx.destination);
-
-  const clampedOffset = Math.max(0, Math.min(startOffset, slot.audioBuffer.duration - 0.05));
   slot.pauseOffsetSec = clampedOffset;
   filePlayStartCtxTime = ctx.currentTime - clampedOffset;
 
@@ -679,16 +779,30 @@ function getActiveSnapshot() {
   const slot = getSlot();
   if (currentMode === 'file' && slot.analysis) {
     const summary = slot.analysis.summary;
-    if (fileIsPlaying) {
-      const liveSnap = engine.getSnapshot();
+    const tl = slot.analysis.timeline;
+    if (fileIsPlaying && tl && tl.length > 0) {
+      const playSec = getFilePlayheadSec();
+      // Interpolate directly from the exact pre-analyzed timeline (zero audio-thread jitter!)
+      const rawIdx = (playSec / Math.max(0.01, slot.analysis.durationSec)) * (tl.length - 1);
+      const idx0 = Math.max(0, Math.min(tl.length - 1, Math.floor(rawIdx)));
+      const idx1 = Math.min(tl.length - 1, idx0 + 1);
+      const frac = rawIdx - idx0;
+      const p0 = tl[idx0];
+      const p1 = tl[idx1];
+
+      const interp = (a, b) => {
+        if (!isFinite(a)) return b;
+        if (!isFinite(b)) return a;
+        return a + (b - a) * frac;
+      };
+
       return {
         ...summary,
-        momentary: liveSnap.momentary,
-        shortTerm: liveSnap.shortTerm,
-        truePeakL: liveSnap.truePeakL,
-        truePeakR: liveSnap.truePeakR,
-        psr: liveSnap.psr,
-        correlation: liveSnap.correlation,
+        momentary: interp(p0.momentary, p1.momentary),
+        shortTerm: interp(p0.shortTerm, p1.shortTerm),
+        truePeakL: interp(p0.truePeakL, p1.truePeakL),
+        truePeakR: interp(p0.truePeakR, p1.truePeakR),
+        psr: interp(p0.psr, p1.psr),
       };
     }
     return summary;
@@ -701,15 +815,32 @@ function formatYouleanValue(val, unit) {
   return `${val.toFixed(1)} <span class="ylm-unit">${unit}</span>`;
 }
 
-function updateReadouts(snap) {
+function updateReadouts(snap, now = performance.now()) {
   const preset = STREAMING_PRESETS[currentPresetKey];
 
-  // 5-Row Slate Stack
-  valShortTerm.innerHTML = formatYouleanValue(snap.shortTerm, 'LUFS');
-  valIntegrated.innerHTML = formatYouleanValue(snap.integrated, 'LUFS');
-  valLRA.innerHTML = `${snap.lra.toFixed(1)} <span class="ylm-unit">LU</span>`;
-  valPSR.innerHTML = isFinite(snap.psr) && snap.psr > 0 ? `${snap.psr.toFixed(1)} <span class="ylm-unit">LU</span>` : '-';
-  valPLR.innerHTML = isFinite(snap.plr) && snap.plr > 0 ? `${snap.plr.toFixed(1)} <span class="ylm-unit">LU</span>` : '-';
+  // Smooth 60fps Phase Correlation Thumb
+  const corr = isFinite(ballistics.correlation) ? ballistics.correlation : 1.0;
+  const pct = ((corr + 1) / 2) * 100;
+  if (phaseThumb) phaseThumb.style.left = `${Math.max(3, Math.min(97, pct))}%`;
+
+  // Throttle numeric text readouts to ~5.5 Hz (every 180ms) so digits are calm & readable
+  if (now - lastReadoutUpdateTime < 180) {
+    return;
+  }
+  lastReadoutUpdateTime = now;
+
+  // 5-Row Slate Stack (using smoothed ballistic values)
+  const dispST = ballistics.shortTerm > -57.2 ? ballistics.shortTerm : snap.shortTerm;
+  const dispInt = isFinite(ballistics.integrated) ? ballistics.integrated : snap.integrated;
+  const dispLRA = ballistics.lra;
+  const dispPSR = isFinite(ballistics.psr) ? ballistics.psr : snap.psr;
+  const dispPLR = isFinite(ballistics.plr) ? ballistics.plr : snap.plr;
+
+  valShortTerm.innerHTML = formatYouleanValue(dispST, 'LUFS');
+  valIntegrated.innerHTML = formatYouleanValue(dispInt, 'LUFS');
+  valLRA.innerHTML = `${dispLRA.toFixed(1)} <span class="ylm-unit">LU</span>`;
+  valPSR.innerHTML = isFinite(dispPSR) && dispPSR > 0 ? `${dispPSR.toFixed(1)} <span class="ylm-unit">LU</span>` : '-';
+  valPLR.innerHTML = isFinite(dispPLR) && dispPLR > 0 ? `${dispPLR.toFixed(1)} <span class="ylm-unit">LU</span>` : '-';
 
   // 3 Rounded Pills
   valMomentaryMax.innerHTML = formatYouleanValue(snap.momentaryMax, 'LUFS');
@@ -722,10 +853,6 @@ function updateReadouts(snap) {
     valTruePeakMax.style.color = '#ffffff';
   }
 
-  // Stereo Phase Correlation Meter (-1 .. +1)
-  const corr = isFinite(snap.correlation) ? snap.correlation : 1.0;
-  const pct = ((corr + 1) / 2) * 100;
-  if (phaseThumb) phaseThumb.style.left = `${Math.max(3, Math.min(97, pct))}%`;
   if (valPhaseCorr) {
     const sign = corr >= 0 ? '+' : '';
     valPhaseCorr.textContent = monoCheckEnabled
@@ -829,9 +956,9 @@ function renderBarMeters(snap) {
     ctx.stroke();
   }
 
-  // Momentary Bar Fill (Blue below target, Red above target)
-  const momVal = isFinite(snap.momentary) ? snap.momentary : minLUFS;
-  if (momVal > minLUFS) {
+  // Momentary Bar Fill (60fps Ballistic-Smoothed: Blue below target, Red above target)
+  const momVal = isFinite(ballistics.momentary) ? ballistics.momentary : minLUFS;
+  if (momVal > minLUFS + 0.1) {
     const momY = lufsToY(momVal);
     const targetY = lufsToY(preset.targetLUFS);
     const bottomY = topPad + barH;
@@ -848,9 +975,10 @@ function renderBarMeters(snap) {
     }
   }
 
-  // LRA Bracket [   ]
-  const centerRef = isFinite(snap.integrated) && snap.integrated > -54 ? snap.integrated : -31;
-  const halfLRA = Math.max(2, (snap.lra || 4) / 2);
+  // LRA Bracket [   ] (Smoothed)
+  const centerRef =
+    isFinite(ballistics.integrated) && ballistics.integrated > -54 ? ballistics.integrated : -31;
+  const halfLRA = Math.max(2, (ballistics.lra || 4) / 2);
   const brkTopY = lufsToY(centerRef + halfLRA);
   const brkBotY = lufsToY(centerRef - halfLRA);
 
@@ -870,8 +998,8 @@ function renderBarMeters(snap) {
   ctx.lineTo(barX + barW - 3, brkBotY);
   ctx.stroke();
 
-  // White Triangle Pointer (◀)
-  const ptrVal = isFinite(snap.momentary) && snap.momentary > minLUFS ? snap.momentary : minLUFS + 2;
+  // White Triangle Pointer (◀) (Smoothed)
+  const ptrVal = momVal > minLUFS + 0.2 ? momVal : minLUFS + 2;
   const ptrY = lufsToY(ptrVal);
   ctx.fillStyle = '#e5e9f0';
   ctx.beginPath();
@@ -1527,6 +1655,8 @@ function formatTime(sec) {
 
 function resetMeters() {
   engine.reset();
+  ballistics.reset();
+  lastReadoutUpdateTime = 0;
   liveHistory = [];
   liveHistogram.fill(0);
   const slot = getSlot();
@@ -1731,9 +1861,13 @@ window.addEventListener('keydown', (e) => {
 });
 
 // ================= MAIN 60FPS RENDER LOOP =================
-function tick() {
+function tick(now = performance.now()) {
+  const dt = (now - lastTickTime) / 1000;
+  lastTickTime = now;
+
   const snap = getActiveSnapshot();
-  updateReadouts(snap);
+  updateBallistics(snap, dt);
+  updateReadouts(snap, now);
   renderHistoryGraph(snap);
   renderBarMeters(snap);
   requestAnimationFrame(tick);
