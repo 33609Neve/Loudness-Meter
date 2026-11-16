@@ -1,6 +1,6 @@
 {
-  "name": "ULM Pro — Loudness & True Peak Meter",
-  "short_name": "ULM Pro",
+  "name": "Vibe Loudness Meter",
+  "short_name": "Vibe Meter",
   "description": "ITU-R BS.1770-4 / EBU R128 Standalone Loudness & True Peak Meter",
   "start_url": "./index.html",
   "scope": "./",

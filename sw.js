@@ -1,4 +1,4 @@
-const CACHE_NAME = 'ulm-pro-v3';
+const CACHE_NAME = 'vibe-loudness-meter-v4';
 const ASSETS = [
   './',
   './index.html',
