@@ -1,4 +1,4 @@
-const CACHE_NAME = 'vibe-loudness-meter-v9';
+const CACHE_NAME = 'vibe-loudness-meter-v10';
 const ASSETS = [
   './',
   './index.html',

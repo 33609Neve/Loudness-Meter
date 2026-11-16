@@ -16,6 +16,35 @@ let currentPresetKey = 'spotify';
 let timeWindowSec = 30;
 let graphPaused = false;
 let barMeterMode = 'M'; // 'M' (Momentary bar) | 'S' (Short-Term bar)
+let ballisticsSpeed = 'standard'; // 'fast' | 'standard' | 'smooth'
+let colorTheme = 'classic'; // 'classic' | 'cyan' | 'emerald'
+
+const THEME_PALETTES = {
+  classic: {
+    barMain: '#5887da',
+    barOver: '#d95852',
+    curveFill: 'rgba(88, 135, 218, 0.45)',
+    curveStroke: '#6b9be8',
+    overFill: 'rgba(217, 88, 82, 0.55)',
+    overStroke: '#ef6b65',
+  },
+  cyan: {
+    barMain: '#06b6d4',
+    barOver: '#f59e0b',
+    curveFill: 'rgba(6, 182, 212, 0.42)',
+    curveStroke: '#22d3ee',
+    overFill: 'rgba(245, 158, 11, 0.52)',
+    overStroke: '#fbbf24',
+  },
+  emerald: {
+    barMain: '#10b981',
+    barOver: '#ef4444',
+    curveFill: 'rgba(16, 185, 129, 0.42)',
+    curveStroke: '#34d399',
+    overFill: 'rgba(239, 68, 68, 0.55)',
+    overStroke: '#f87171',
+  },
+};
 
 // Pro Audition States
 let normPreviewEnabled = false;
@@ -100,14 +129,15 @@ const ballistics = {
 
 function updateBallistics(snap, dt) {
   const clampedDt = Math.min(0.1, Math.max(0.001, dt));
+  const mult = ballisticsSpeed === 'fast' ? 0.5 : ballisticsSpeed === 'smooth' ? 1.65 : 1.0;
 
   const smoothValue = (current, target, tauUp, tauDown, maxRatePerSec) => {
     if (!isFinite(target)) return current;
     if (!isFinite(current)) return target;
-    const tau = target > current ? tauUp : tauDown;
+    const tau = (target > current ? tauUp : tauDown) * mult;
     const alpha = 1 - Math.exp(-clampedDt / tau);
     let delta = (target - current) * alpha;
-    const maxDelta = maxRatePerSec * clampedDt;
+    const maxDelta = (maxRatePerSec / mult) * clampedDt;
     if (Math.abs(delta) > maxDelta) {
       delta = Math.sign(delta) * maxDelta;
     }
@@ -182,6 +212,16 @@ const exportMenu = document.getElementById('exportMenu');
 const btnExportPNG = document.getElementById('btnExportPNG');
 const btnExportCSV = document.getElementById('btnExportCSV');
 const btnExportJSON = document.getElementById('btnExportJSON');
+
+// Settings Menu DOM
+const btnSettings = document.getElementById('btnSettings');
+const settingsMenu = document.getElementById('settingsMenu');
+const btnCloseSettings = document.getElementById('btnCloseSettings');
+const inpCustomTarget = document.getElementById('inpCustomTarget');
+const inpCustomCeiling = document.getElementById('inpCustomCeiling');
+const selBallistics = document.getElementById('selBallistics');
+const selTheme = document.getElementById('selTheme');
+const btnClearAllSlots = document.getElementById('btnClearAllSlots');
 
 // Readout DOM (5-row stack + 3 pills + Phase Correlation)
 const valShortTerm = document.getElementById('valShortTerm');
@@ -986,6 +1026,7 @@ function renderBarMeters() {
   }
 
   // Bar Fill (Momentary 'M' or Short-Term 'S' mode)
+  const palette = THEME_PALETTES[colorTheme] || THEME_PALETTES.classic;
   const activeBarVal = barMeterMode === 'S' ? ballistics.shortTerm : ballistics.momentary;
   const barVal = isFinite(activeBarVal) ? activeBarVal : minLUFS;
   if (barVal > minLUFS + 0.1) {
@@ -995,12 +1036,12 @@ function renderBarMeters() {
 
     const blueTopY = Math.max(barY, targetY);
     if (bottomY > blueTopY) {
-      ctx.fillStyle = '#5887da';
+      ctx.fillStyle = palette.barMain;
       ctx.fillRect(barX, blueTopY, barW, bottomY - blueTopY);
     }
 
     if (barY < targetY) {
-      ctx.fillStyle = '#d95852';
+      ctx.fillStyle = palette.barOver;
       ctx.fillRect(barX, barY, barW, targetY - barY);
     }
   }
@@ -1264,28 +1305,29 @@ function renderHistoryGraph() {
         ctx.closePath();
       };
 
-      // Below Target Clip -> Blue Fill & Stroke
+      // Below Target Clip -> Theme Main Fill & Stroke
+      const palette = THEME_PALETTES[colorTheme] || THEME_PALETTES.classic;
       ctx.save();
       ctx.beginPath();
       ctx.rect(plotLeft, targetY, plotW, topPad + plotH - targetY);
       ctx.clip();
       drawCurvePath();
-      ctx.fillStyle = 'rgba(88, 135, 218, 0.45)';
+      ctx.fillStyle = palette.curveFill;
       ctx.fill();
-      ctx.strokeStyle = '#6b9be8';
+      ctx.strokeStyle = palette.curveStroke;
       ctx.lineWidth = 1.6;
       ctx.stroke();
       ctx.restore();
 
-      // Above Target Clip -> Red Fill & Stroke
+      // Above Target Clip -> Theme Over Fill & Stroke
       ctx.save();
       ctx.beginPath();
       ctx.rect(plotLeft, topPad, plotW, Math.max(0, targetY - topPad));
       ctx.clip();
       drawCurvePath();
-      ctx.fillStyle = 'rgba(217, 88, 82, 0.55)';
+      ctx.fillStyle = palette.overFill;
       ctx.fill();
-      ctx.strokeStyle = '#ef6b65';
+      ctx.strokeStyle = palette.overStroke;
       ctx.lineWidth = 1.6;
       ctx.stroke();
       ctx.restore();
@@ -1794,6 +1836,9 @@ fileInput.addEventListener('change', (e) => {
 
 presetSelect.addEventListener('change', (e) => {
   currentPresetKey = e.target.value;
+  const p = STREAMING_PRESETS[currentPresetKey];
+  if (inpCustomTarget && p) inpCustomTarget.value = p.targetLUFS.toFixed(1);
+  if (inpCustomCeiling && p) inpCustomCeiling.value = p.maxTruePeak.toFixed(1);
   lastReadoutUpdateTime = 0;
   applyRealtimePlaybackRouting();
 });
@@ -1810,6 +1855,7 @@ btnPiP.addEventListener('click', toggleAlwaysOnTopPiP);
 // Export Menu Listeners
 btnExport.addEventListener('click', (e) => {
   e.stopPropagation();
+  if (settingsMenu) settingsMenu.classList.add('hidden');
   exportMenu.classList.toggle('hidden');
 });
 btnExportPNG.addEventListener('click', () => {
@@ -1824,8 +1870,72 @@ btnExportJSON.addEventListener('click', () => {
   exportMenu.classList.add('hidden');
   exportLoudnessReport();
 });
+
+// Settings Menu Listeners
+if (btnSettings && settingsMenu) {
+  btnSettings.addEventListener('click', (e) => {
+    e.stopPropagation();
+    exportMenu.classList.add('hidden');
+    settingsMenu.classList.toggle('hidden');
+  });
+  settingsMenu.addEventListener('click', (e) => {
+    e.stopPropagation();
+  });
+}
+if (btnCloseSettings) {
+  btnCloseSettings.addEventListener('click', () => {
+    settingsMenu.classList.add('hidden');
+  });
+}
+if (inpCustomTarget) {
+  inpCustomTarget.addEventListener('input', (e) => {
+    const val = parseFloat(e.target.value);
+    if (isFinite(val) && val >= -48 && val <= 0) {
+      STREAMING_PRESETS[currentPresetKey].targetLUFS = val;
+      lastReadoutUpdateTime = 0;
+      applyRealtimePlaybackRouting();
+    }
+  });
+}
+if (inpCustomCeiling) {
+  inpCustomCeiling.addEventListener('input', (e) => {
+    const val = parseFloat(e.target.value);
+    if (isFinite(val) && val >= -12 && val <= 0) {
+      STREAMING_PRESETS[currentPresetKey].maxTruePeak = val;
+      lastReadoutUpdateTime = 0;
+      applyRealtimePlaybackRouting();
+    }
+  });
+}
+if (selBallistics) {
+  selBallistics.addEventListener('change', (e) => {
+    ballisticsSpeed = e.target.value;
+  });
+}
+if (selTheme) {
+  selTheme.addEventListener('change', (e) => {
+    colorTheme = e.target.value;
+  });
+}
+if (btnClearAllSlots) {
+  btnClearAllSlots.addEventListener('click', () => {
+    stopAllActiveAudio();
+    ['A', 'B'].forEach((k) => {
+      slots[k].audioBuffer = null;
+      slots[k].fileName = '';
+      slots[k].analysis = null;
+      slots[k].histogram.fill(0);
+      slots[k].pauseOffsetSec = 0;
+    });
+    resetMeters();
+    updateABButtonsUI();
+    settingsMenu.classList.add('hidden');
+  });
+}
+
 window.addEventListener('click', () => {
   if (exportMenu) exportMenu.classList.add('hidden');
+  if (settingsMenu) settingsMenu.classList.add('hidden');
 });
 
 // A / B Slot Listeners

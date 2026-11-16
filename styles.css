@@ -215,6 +215,116 @@ html, body {
   color: #ffffff;
 }
 
+/* Settings Popover Menu */
+.ylm-settings-wrap {
+  position: relative;
+  display: inline-flex;
+}
+
+.ylm-settings-menu {
+  position: absolute;
+  top: 34px;
+  right: 0;
+  width: 280px;
+  background: #252a34;
+  border: 1px solid #454d5e;
+  border-radius: 9px;
+  padding: 12px;
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.65);
+  z-index: 120;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  color: #f0f4f8;
+}
+
+.ylm-settings-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.5px;
+  color: #b8c2d1;
+  padding-bottom: 6px;
+  border-bottom: 1px solid #394150;
+}
+
+.ylm-settings-close {
+  background: transparent;
+  border: none;
+  color: #9aa3b2;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.ylm-setting-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.ylm-setting-row input,
+.ylm-setting-row select {
+  background: #1b1e26;
+  border: 1px solid #454d5e;
+  border-radius: 5px;
+  color: #ffffff;
+  font-family: var(--font-main);
+  font-size: 12px;
+  font-weight: 600;
+  padding: 4px 7px;
+  outline: none;
+}
+
+.ylm-setting-row input {
+  width: 78px;
+  text-align: right;
+}
+
+.ylm-setting-row select {
+  width: 135px;
+}
+
+.ylm-settings-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 4px;
+  padding-top: 8px;
+  border-top: 1px solid #394150;
+}
+
+.ylm-settings-action-btn {
+  background: #363c48;
+  border: 1px solid #4a5262;
+  color: #f0f4f8;
+  border-radius: 6px;
+  padding: 6px 10px;
+  font-family: var(--font-main);
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.ylm-settings-action-btn:hover {
+  background: #434b59;
+}
+
+.ylm-settings-action-btn.danger {
+  background: rgba(214, 118, 122, 0.2);
+  border-color: #d6767a;
+  color: #fecaca;
+}
+
+.ylm-settings-action-btn.danger:hover {
+  background: #d6767a;
+  color: #ffffff;
+}
+
 /* ================= MAIN DARK WORKSPACE ================= */
 .ylm-main {
   flex: 1;
