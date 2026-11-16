@@ -56,14 +56,24 @@
         <sup class="ylm-brand-sup" id="statusText"></sup>
       </div>
 
-      <!-- Right Files & Utility Icons -->
+      <!-- Right Audition, Files & Export Controls -->
       <div class="ylm-top-right">
         <button id="btnInstallPWA" class="ylm-top-pill hidden" title="독/바탕화면에 앱으로 설치">
           INSTALL APP
         </button>
 
-        <label for="fileInput" class="ylm-files-btn" title="오디오 파일(WAV, MP3, FLAC 등) 열기 또는 드래그 앤 드롭">
-          <span>FILES</span>
+        <!-- Streaming Normalization Preview Toggle -->
+        <button id="btnNormPreview" class="ylm-top-pill" title="스트리밍 노멀라이제이션 볼륨(Penalty) 실시간 적용 미리듣기 (단축키: N)">
+          NORM PREVIEW
+        </button>
+
+        <!-- Mono Fold-down Check Toggle -->
+        <button id="btnMonoCheck" class="ylm-top-pill" title="모노 폴드다운(L+R 합산) 위상 호환성 청음 체크">
+          MONO
+        </button>
+
+        <label for="fileInput" class="ylm-files-btn" title="현재 선택된 슬롯(A 또는 B)에 오디오 파일 열기">
+          <span id="lblFilesBtn">FILES</span>
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
             <polyline points="14 2 14 8 20 8"/>
@@ -73,19 +83,26 @@
           <input id="fileInput" type="file" accept="audio/*,.wav,.mp3,.flac,.ogg,.m4a,.aac,.aiff" hidden />
         </label>
 
-        <!-- Export Report Icon -->
-        <button id="btnExport" class="ylm-icon-btn" title="측정 리포트(JSON) 내보내기">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
-            <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>
-            <polyline points="15 3 21 3 21 9"/>
-            <line x1="10" y1="14" x2="21" y2="3"/>
-          </svg>
-        </button>
+        <!-- Export Menu Wrapper -->
+        <div class="ylm-export-wrap">
+          <button id="btnExport" class="ylm-icon-btn" title="리포트 내보내기 (PNG 이미지 / CSV / JSON)">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+              <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>
+              <polyline points="15 3 21 3 21 9"/>
+              <line x1="10" y1="14" x2="21" y2="3"/>
+            </svg>
+          </button>
+          <div id="exportMenu" class="ylm-export-menu hidden">
+            <button id="btnExportPNG" class="ylm-menu-item">📸 그래프 & 수치 PNG 이미지 저장</button>
+            <button id="btnExportCSV" class="ylm-menu-item">📊 전체 타임라인 CSV 내보내기</button>
+            <button id="btnExportJSON" class="ylm-menu-item">📄 측정 요약 JSON 내보내기</button>
+          </div>
+        </div>
 
-        <!-- Settings / Audio Stop Icon -->
+        <!-- Stop Audio Icon -->
         <button id="btnStopFile" class="ylm-icon-btn" title="오디오 정지">
           <svg width="19" height="19" viewBox="0 0 24 24" fill="currentColor">
-            <path d="M19.14,12.94c0.04-0.3,0.06-0.61,0.06-0.94c0-0.32-0.02-0.64-0.07-0.94l2.03-1.58c0.18-0.14,0.23-0.41,0.12-0.61 l-1.92-3.32c-0.12-0.22-0.37-0.29-0.59-0.22l-2.39,0.96c-0.5-0.38-1.03-0.7-1.62-0.94L14.4,2.81c-0.04-0.24-0.24-0.41-0.48-0.41 h-3.84c-0.24,0-0.43,0.17-0.47,0.41L9.25,5.35C8.66,5.59,8.12,5.92,7.63,6.29L5.24,5.33c-0.22-0.08-0.47,0-0.59,0.22L2.74,8.87 C2.62,9.08,2.66,9.34,2.86,9.48l2.03,1.58C4.84,11.36,4.8,11.69,4.8,12s0.02,0.64,0.07,0.94l-2.03,1.58 c-0.18,0.14-0.23,0.41-0.12,0.61l1.92,3.32c0.12,0.22,0.37,0.29,0.59,0.22l2.39-0.96c0.5,0.38,1.03,0.7,1.62,0.94l0.36,2.54 c0.05,0.24,0.24,0.41,0.48,0.41h3.84c0.24,0,0.44-0.17,0.47-0.41l0.36-2.54c0.59-0.24,1.13-0.56,1.62-0.94l2.39,0.96 c0.22,0.08,0.47,0,0.59-0.22l1.92-3.32c0.12-0.22,0.07-0.47-0.12-0.61L19.14,12.94z M12,15.6c-1.98,0-3.6-1.62-3.6-3.6 s1.62-3.6,3.6-3.6s3.6,1.62,3.6,3.6S13.98,15.6,12,15.6z"/>
+            <path d="M19.14,12.94c0.04-0.3,0.06-0.61,0.06-0.94c0-0.32-0.02-0.64-0.07-0.94l2.03-1.58c0.18-0.14,0.23-0.41,0.12-0.61 l-1.92-3.32c-0.12-0.22-0.37-0.29-0.59-0.22l-2.39,0.96c-0.5-0.38-1.03-0.7-1.62-0.94L14.4,2.81c-0.04-0.24-0.24-0.41-0.48-0.41 h-3.84c-0.24,0-0.43,0.17-0.47,0.41L9.25,5.35C8.66,5.59,8.12,5.92,7.63,6.29L5.24,5.33c-0.22-0.08-0.47,0-0.59,0.22L2.74,8.87 C2.62,9.08,2.66,9.34,2.86,9.48l2.03,1.58C4.84,11.36,4.8,11.69,4.8,12s0.02,0.64,0.07,0.94l-2.03,1.58 c-0.18,0.14-0.23,0.41-0.12,0.61l1.92,3.32c0.12,0.22,0.37,0.29,0.59,0.22l2.39-0.96c0.5,0.38,1.03,0.7,1.62,0.94l0.36,2.54 c0.05,0.24,0.24,0.41,0.48,0.41h3.84c-0.24,0,0.44-0.17,0.47-0.41l0.36-2.54c0.59-0.24,1.13-0.56,1.62-0.94l2.39,0.96 c0.22,0.08,0.47,0,0.59-0.22l1.92-3.32c0.12-0.22,0.07-0.47-0.12-0.61L19.14,12.94z M12,15.6c-1.98,0-3.6-1.62-3.6-3.6 s1.62-3.6,3.6-3.6s3.6,1.62,3.6,3.6S13.98,15.6,12,15.6z"/>
           </svg>
         </button>
       </div>
@@ -109,7 +126,7 @@
         </div>
       </section>
 
-      <!-- COLUMN 2: Center-Left Readout Stack & Pills -->
+      <!-- COLUMN 2: Center-Left Readout Stack, 3 Pills & Phase Meter -->
       <section class="ylm-col-readouts">
         <!-- 5-Row Slate Stack -->
         <div class="ylm-slate-stack">
@@ -157,10 +174,23 @@
           </div>
         </div>
 
+        <!-- Stereo Phase Correlation Meter (-1 .. 0 .. +1) -->
+        <div class="ylm-phase-box" title="스테레오 위상 상관도 (-1: 역위상 캔슬링 위험 ~ +1: 완벽한 모노 호환)">
+          <div class="ylm-phase-scale">
+            <span>-1</span>
+            <span id="valPhaseCorr">PHASE +1.00</span>
+            <span>+1</span>
+          </div>
+          <div class="ylm-phase-track">
+            <div class="ylm-phase-zero"></div>
+            <div id="phaseThumb" class="ylm-phase-thumb" style="left: 100%"></div>
+          </div>
+        </div>
+
         <!-- Bottom AUTO & Red X Reset Row -->
         <div class="ylm-readout-bottom">
-          <button id="btnAutoScale" class="ylm-auto-pill" title="타겟 대비 게인/상태 확인">AUTO</button>
-          <button id="btnReset" class="ylm-reset-btn" title="모든 측정값 및 그래프 초기화 (단축키: R)">
+          <button id="btnAutoScale" class="ylm-auto-pill" title="클릭하여 스트리밍 노멀라이제이션 볼륨 미리듣기 토글">AUTO</button>
+          <button id="btnReset" class="ylm-reset-btn" title="현재 슬롯 측정값 초기화 (단축키: R)">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4">
               <line x1="18" y1="6" x2="6" y2="18"/>
               <line x1="6" y1="6" x2="18" y2="18"/>
@@ -175,7 +205,7 @@
 
         <!-- Floating Graph Overlay Buttons (Bottom-Right of Main Plot) -->
         <div class="ylm-graph-float-btns">
-          <button id="btnFloatAudio" class="ylm-float-circle active-red" title="오디오 모니터링 / 기준 톤 토글">
+          <button id="btnFloatAudio" class="ylm-float-circle active-red" title="스트리밍 노멀라이제이션 볼륨 미리듣기 토글">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
               <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/>
               <path d="M15.54 8.46a5 5 0 0 1 0 7.07"/>
@@ -186,7 +216,7 @@
               <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
             </svg>
           </button>
-          <button id="btnFloatTarget" class="ylm-float-circle" title="타겟 기준선 표시 전환">
+          <button id="btnFloatTarget" class="ylm-float-circle" title="타겟 기준선 및 비교 곡선 표시 전환">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
               <line x1="4" y1="9" x2="20" y2="9"/>
               <line x1="4" y1="15" x2="20" y2="15"/>
@@ -197,7 +227,7 @@
         <!-- Drag & Drop Overlay -->
         <div id="dropOverlay" class="ylm-drop-overlay hidden">
           <div class="ylm-drop-box">
-            <h3>DROP AUDIO FILE HERE</h3>
+            <h3 id="dropTitle">DROP AUDIO FILE INTO SLOT A</h3>
             <p>WAV · MP3 · FLAC · M4A · OGG — Instant Full-Track Loudness Graph</p>
           </div>
         </div>
@@ -235,10 +265,11 @@
       </div>
 
       <div class="ylm-bot-center">
-        <div class="ylm-ab-switch">
-          <span class="ab-active">A</span>
+        <!-- Interactive A | B Comparison Switch -->
+        <div class="ylm-ab-switch" title="A / B 슬롯 전환 — 내 음원(A)과 레퍼런스 곡(B)을 각각 불러와 비교하세요 (단축키: A / B)">
+          <button id="btnSlotA" class="ab-btn ab-active">A</button>
           <span class="ab-sep">|</span>
-          <span>B</span>
+          <button id="btnSlotB" class="ab-btn">B</button>
         </div>
 
         <!-- Time Window Outlined Pill -->
@@ -265,11 +296,11 @@
           <button class="ylm-circle-toggle active" data-layer="S" title="Short-Term 곡선 표시">S</button>
           <button class="ylm-circle-toggle" data-layer="M" title="Momentary 곡선 표시">M</button>
           <button class="ylm-circle-toggle active" data-layer="T" title="True Peak 마커 표시">T</button>
-          <button class="ylm-circle-toggle" data-layer="D" title="Dynamics 표시">D</button>
+          <button class="ylm-circle-toggle" data-layer="D" title="Dynamics / A-B 비교 곡선 표시">D</button>
           <button class="ylm-circle-toggle active" data-layer="G" title="Grid / Target 기준선 표시">G</button>
         </div>
 
-        <span class="ylm-file-status" id="fileMetaInfo" title="현재 오디오 소스 상태">READY</span>
+        <span class="ylm-file-status" id="fileMetaInfo" title="현재 오디오 소스 상태">SLOT A: READY</span>
       </div>
     </footer>
   </div>

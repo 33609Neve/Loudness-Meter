@@ -164,6 +164,14 @@ class LoudnessMeterEngine {
     this.maxTruePeak = 0;
     this.clipCount = 0;
 
+    // Stereo Phase Correlation (-1 to +1) & L/R Balance
+    this.correlation = 1.0;
+    this.minCorrelation = 1.0;
+    this.balance = 0.0;
+    this._corrSumLR = 0;
+    this._corrSumLL = 0;
+    this._corrSumRR = 0;
+
     // Cached gated calculation throttling
     this.blocksSinceGateUpdate = 0;
     this.totalSamplesProcessed = 0;
@@ -180,11 +188,20 @@ class LoudnessMeterEngine {
 
     const { stage1, stage2 } = this.coeffs;
 
-    // Per-block instantaneous peaks
+    // Per-block instantaneous peaks & phase correlation accumulators
     const blockSamplePeak = new Float64Array(this.numChannels);
     const blockTruePeak = new Float64Array(this.numChannels);
+    let chunkLR = 0;
+    let chunkLL = 0;
+    let chunkRR = 0;
 
     for (let i = 0; i < length; i++) {
+      const sampleL = channelBuffers[0][i];
+      const sampleR = numCh > 1 ? channelBuffers[1][i] : sampleL;
+      chunkLR += sampleL * sampleR;
+      chunkLL += sampleL * sampleL;
+      chunkRR += sampleR * sampleR;
+
       for (let ch = 0; ch < numCh; ch++) {
         const x = channelBuffers[ch][i];
         const state = this.channels[ch];
@@ -266,6 +283,21 @@ class LoudnessMeterEngine {
     for (let ch = 0; ch < this.numChannels; ch++) {
       this.samplePeakCh[ch] = Math.max(blockSamplePeak[ch], this.samplePeakCh[ch] * 0.86);
       this.truePeakCh[ch] = Math.max(blockTruePeak[ch], this.truePeakCh[ch] * 0.86);
+    }
+
+    // Update Stereo Phase Correlation & Balance with exponential smoothing
+    this._corrSumLR = this._corrSumLR * 0.78 + chunkLR * 0.22;
+    this._corrSumLL = this._corrSumLL * 0.78 + chunkLL * 0.22;
+    this._corrSumRR = this._corrSumRR * 0.78 + chunkRR * 0.22;
+    const denom = Math.sqrt(this._corrSumLL * this._corrSumRR);
+    if (denom > 1e-9) {
+      const instCorr = Math.max(-1, Math.min(1, this._corrSumLR / denom));
+      this.correlation = instCorr;
+      if (instCorr < this.minCorrelation) {
+        this.minCorrelation = instCorr;
+      }
+      const totalLR = this._corrSumLL + this._corrSumRR;
+      this.balance = totalLR > 1e-9 ? (this._corrSumRR - this._corrSumLL) / totalLR : 0;
     }
   }
 
@@ -410,6 +442,9 @@ class LoudnessMeterEngine {
       maxSamplePeak: maxSpDB,
       plr,
       psr,
+      correlation: this.correlation,
+      minCorrelation: this.minCorrelation,
+      balance: this.balance,
       clipCount: this.clipCount,
       durationSec: this.totalSamplesProcessed / this.sampleRate,
     };

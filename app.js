@@ -13,22 +13,45 @@ let engine = new LoudnessMeterEngine(48000, 2);
 
 let currentMode = 'standby'; // 'standby' | 'live' | 'system' | 'file' | 'tone'
 let currentPresetKey = 'spotify';
-let timeWindowSec = 30; // 10, 30, 60, 300, or 0 (full)
+let timeWindowSec = 30;
 let graphPaused = false;
+
+// Pro Audition States
+let normPreviewEnabled = false;
+let monoCheckEnabled = false;
 
 // Graph layer toggles (S, M, T, D, G)
 const layers = {
   S: true,  // Short-Term curve
   M: false, // Momentary curve
   T: true,  // True Peak markers
-  D: false, // Dynamics PSR overlay
+  D: true,  // Dynamics / A-B Ghost Comparison curve
   G: true,  // Grid & Target line
 };
 
-// Live history buffer (10 Hz points) & Histogram bins (-60 LUFS to 0 LUFS, 120 bins of 0.5 LU)
-let liveHistory = [];
+// Live history buffer & Histogram bins (-60 LUFS to 0 LUFS, 120 bins of 0.5 LU)
 const HIST_BINS = 120;
+let liveHistory = [];
 let liveHistogram = new Float64Array(HIST_BINS);
+
+// A / B Comparison Slots
+let activeSlotKey = 'A';
+const slots = {
+  A: {
+    audioBuffer: null,
+    fileName: '',
+    analysis: null,
+    histogram: new Float64Array(HIST_BINS),
+    pauseOffsetSec: 0,
+  },
+  B: {
+    audioBuffer: null,
+    fileName: '',
+    analysis: null,
+    histogram: new Float64Array(HIST_BINS),
+    pauseOffsetSec: 0,
+  },
+};
 
 // Active WebAudio nodes
 let activeStream = null;
@@ -38,15 +61,12 @@ let zeroGainNode = null;
 let toneOscNode = null;
 let toneGainNode = null;
 
-// File analysis & playback state
-let loadedAudioBuffer = null;
-let loadedFileName = '';
-let offlineAnalysisResult = null;
-let offlineHistogram = new Float64Array(HIST_BINS);
+// File playback nodes
 let fileSourceNode = null;
+let playbackGainNode = null;
+let monoSumNode = null;
 let fileIsPlaying = false;
 let filePlayStartCtxTime = 0;
-let filePauseOffsetSec = 0;
 
 // Graph hover state
 let hoverPoint = null;
@@ -57,16 +77,26 @@ const btnLiveInput = document.getElementById('btnLiveInput');
 const deviceSelect = document.getElementById('deviceSelect');
 const btnSystemAudio = document.getElementById('btnSystemAudio');
 const fileInput = document.getElementById('fileInput');
+const lblFilesBtn = document.getElementById('lblFilesBtn');
 const btnTestTone = document.getElementById('btnTestTone');
+
+const btnNormPreview = document.getElementById('btnNormPreview');
+const btnMonoCheck = document.getElementById('btnMonoCheck');
 
 const presetSelect = document.getElementById('presetSelect');
 const btnReset = document.getElementById('btnReset');
 const btnMiniMode = document.getElementById('btnMiniMode');
 const btnPiP = document.getElementById('btnPiP');
-const btnExport = document.getElementById('btnExport');
 const btnAutoScale = document.getElementById('btnAutoScale');
 
-// Readout DOM (Youlean 5-row stack + 3 pills)
+// Export Menu DOM
+const btnExport = document.getElementById('btnExport');
+const exportMenu = document.getElementById('exportMenu');
+const btnExportPNG = document.getElementById('btnExportPNG');
+const btnExportCSV = document.getElementById('btnExportCSV');
+const btnExportJSON = document.getElementById('btnExportJSON');
+
+// Readout DOM (5-row stack + 3 pills + Phase Correlation)
 const valShortTerm = document.getElementById('valShortTerm');
 const valIntegrated = document.getElementById('valIntegrated');
 const valLRA = document.getElementById('valLRA');
@@ -78,7 +108,14 @@ const valShortTermMax = document.getElementById('valShortTermMax');
 const valTruePeakMax = document.getElementById('valTruePeakMax');
 const verdictText = document.getElementById('verdictText');
 
-// Graph & Transport DOM
+const valPhaseCorr = document.getElementById('valPhaseCorr');
+const phaseThumb = document.getElementById('phaseThumb');
+
+// A/B & Graph DOM
+const btnSlotA = document.getElementById('btnSlotA');
+const btnSlotB = document.getElementById('btnSlotB');
+const dropTitle = document.getElementById('dropTitle');
+
 const windowSelector = document.getElementById('windowSelector');
 const btnPauseGraph = document.getElementById('btnPauseGraph');
 const lblGraphMode = document.getElementById('lblGraphMode');
@@ -95,11 +132,40 @@ const btnFloatAudio = document.getElementById('btnFloatAudio');
 const btnFloatPeaks = document.getElementById('btnFloatPeaks');
 const btnFloatTarget = document.getElementById('btnFloatTarget');
 
-// ================= HISTOGRAM HELPER =================
+// ================= SLOT & HISTOGRAM HELPERS =================
+function getSlot(key = activeSlotKey) {
+  return slots[key];
+}
+
+function getOtherSlot() {
+  return slots[activeSlotKey === 'A' ? 'B' : 'A'];
+}
+
 function addHistogramSample(histArray, lufsValue) {
   if (!isFinite(lufsValue) || lufsValue < -60 || lufsValue > 0) return;
   const binIdx = Math.min(HIST_BINS - 1, Math.max(0, Math.floor(((lufsValue + 60) / 60) * HIST_BINS)));
   histArray[binIdx] += 1;
+}
+
+// ================= STREAMING NORMALIZATION GAIN CALCULATOR =================
+function computeNormalizationGainDB(snap) {
+  const preset = STREAMING_PRESETS[currentPresetKey];
+  if (!snap || !isFinite(snap.integrated) || snap.integrated < -70) return 0;
+  let gainDB = preset.targetLUFS - snap.integrated;
+  // If boosting a quiet track, limit boost by True Peak ceiling headroom
+  if (gainDB > 0 && isFinite(snap.maxTruePeak)) {
+    const headroomDB = preset.maxTruePeak - snap.maxTruePeak;
+    gainDB = Math.min(gainDB, Math.max(0, headroomDB));
+  }
+  return gainDB;
+}
+
+function applyRealtimePlaybackRouting() {
+  if (!audioCtx || !playbackGainNode) return;
+  const snap = getActiveSnapshot();
+  const gainDB = normPreviewEnabled ? computeNormalizationGainDB(snap) : 0;
+  const linearGain = Math.pow(10, gainDB / 20);
+  playbackGainNode.gain.setTargetAtTime(linearGain, audioCtx.currentTime, 0.03);
 }
 
 // ================= AUDIO CONTEXT & GRAPH SETUP =================
@@ -123,6 +189,18 @@ function stopAllActiveAudio(keepFileLoaded = false) {
       fileSourceNode.disconnect();
     } catch (_) {}
     fileSourceNode = null;
+  }
+  if (playbackGainNode) {
+    try {
+      playbackGainNode.disconnect();
+    } catch (_) {}
+    playbackGainNode = null;
+  }
+  if (monoSumNode) {
+    try {
+      monoSumNode.disconnect();
+    } catch (_) {}
+    monoSumNode = null;
   }
   fileIsPlaying = false;
   updatePlayPauseIcon();
@@ -397,42 +475,75 @@ function toggleReferenceTone() {
   setStatus('tone', 'TONE');
 }
 
-// ================= 4. FILE DRAG & DROP + OFFLINE & REALTIME PLAYER =================
+// ================= 4. FILE DRAG & DROP + A/B SLOT STORAGE & PLAYBACK =================
 async function handleFileLoad(file) {
   if (!file) return;
   stopAllActiveAudio();
 
   try {
-    setStatus('file', 'WAIT');
+    const slot = getSlot();
+    setStatus('file', `SLOT ${activeSlotKey}`);
     fileMetaInfo.textContent = `Loading ${file.name}...`;
 
     const ctx = ensureAudioContext();
     const arrayBuf = await file.arrayBuffer();
     const audioBuffer = await ctx.decodeAudioData(arrayBuf);
 
-    loadedAudioBuffer = audioBuffer;
-    loadedFileName = file.name;
-    filePauseOffsetSec = 0;
+    slot.audioBuffer = audioBuffer;
+    slot.fileName = file.name;
+    slot.pauseOffsetSec = 0;
 
-    offlineAnalysisResult = analyzeAudioBufferOffline(audioBuffer);
-    offlineHistogram.fill(0);
-    for (const pt of offlineAnalysisResult.timeline) {
-      addHistogramSample(offlineHistogram, isFinite(pt.shortTerm) ? pt.shortTerm : pt.momentary);
+    slot.analysis = analyzeAudioBufferOffline(audioBuffer);
+    slot.histogram.fill(0);
+    for (const pt of slot.analysis.timeline) {
+      addHistogramSample(slot.histogram, isFinite(pt.shortTerm) ? pt.shortTerm : pt.momentary);
     }
 
     timeWindowSec = 0;
     windowSelector.value = '0';
 
-    fileMetaInfo.textContent = file.name;
-    setStatus('file', 'FILE');
+    updateABButtonsUI();
+    fileMetaInfo.textContent = `[${activeSlotKey}] ${file.name}`;
+    setStatus('file', `SLOT ${activeSlotKey}`);
   } catch (err) {
     alert(`오디오 파일을 디코딩할 수 없습니다: ${err.message}`);
     setStatus('standby', '');
   }
 }
 
-function startFilePlayback(offsetSec = filePauseOffsetSec) {
-  if (!loadedAudioBuffer) return;
+function switchABSlot(targetKey) {
+  if (targetKey !== 'A' && targetKey !== 'B') return;
+  if (fileIsPlaying) {
+    pauseFilePlayback();
+  }
+  activeSlotKey = targetKey;
+  const slot = getSlot();
+  if (slot.analysis) {
+    currentMode = 'file';
+    setStatus('file', `SLOT ${activeSlotKey}`);
+    fileMetaInfo.textContent = `[${activeSlotKey}] ${slot.fileName}`;
+  } else {
+    fileMetaInfo.textContent = `SLOT ${activeSlotKey}: EMPTY (파일을 드롭하세요)`;
+  }
+  if (dropTitle) {
+    dropTitle.textContent = `DROP AUDIO FILE INTO SLOT ${activeSlotKey}`;
+  }
+  if (lblFilesBtn) {
+    lblFilesBtn.textContent = `FILES (${activeSlotKey})`;
+  }
+  updateABButtonsUI();
+}
+
+function updateABButtonsUI() {
+  btnSlotA.classList.toggle('ab-active', activeSlotKey === 'A');
+  btnSlotB.classList.toggle('ab-active', activeSlotKey === 'B');
+  btnSlotA.classList.toggle('has-data', Boolean(slots.A.analysis));
+  btnSlotB.classList.toggle('has-data', Boolean(slots.B.analysis));
+}
+
+function startFilePlayback(offsetSec) {
+  const slot = getSlot();
+  if (!slot.audioBuffer) return;
   const ctx = ensureAudioContext();
 
   if (fileSourceNode) {
@@ -443,10 +554,17 @@ function startFilePlayback(offsetSec = filePauseOffsetSec) {
     } catch (_) {}
   }
 
+  const startOffset = offsetSec !== undefined ? offsetSec : slot.pauseOffsetSec;
   fileSourceNode = ctx.createBufferSource();
-  fileSourceNode.buffer = loadedAudioBuffer;
+  fileSourceNode.buffer = slot.audioBuffer;
 
-  engine.setConfig(loadedAudioBuffer.sampleRate, 2);
+  // Normalization Preview GainNode
+  playbackGainNode = ctx.createGain();
+  const gainDB = normPreviewEnabled ? computeNormalizationGainDB(slot.analysis?.summary) : 0;
+  playbackGainNode.gain.value = Math.pow(10, gainDB / 20);
+
+  // Live DSP engine feed (pre-normalization so meters show true track levels, or post-mono)
+  engine.setConfig(slot.audioBuffer.sampleRate, 2);
   processorNode = ctx.createScriptProcessor(2048, 2, 2);
   zeroGainNode = ctx.createGain();
   zeroGainNode.gain.value = 0;
@@ -455,22 +573,51 @@ function startFilePlayback(offsetSec = filePauseOffsetSec) {
     const inBuf = e.inputBuffer;
     const ch0 = inBuf.getChannelData(0);
     const ch1 = inBuf.numberOfChannels > 1 ? inBuf.getChannelData(1) : ch0;
-    engine.process([ch0, ch1]);
+    if (monoCheckEnabled) {
+      const mono = new Float32Array(ch0.length);
+      for (let i = 0; i < ch0.length; i++) mono[i] = 0.5 * (ch0[i] + ch1[i]);
+      engine.process([mono, mono]);
+    } else {
+      engine.process([ch0, ch1]);
+    }
   };
 
-  fileSourceNode.connect(ctx.destination);
+  fileSourceNode.connect(playbackGainNode);
+
+  if (monoCheckEnabled && slot.audioBuffer.numberOfChannels >= 2) {
+    // True Mono Fold-Down (L+R)*0.5 to both ears
+    const splitter = ctx.createChannelSplitter(2);
+    const merger = ctx.createChannelMerger(2);
+    const gainL = ctx.createGain();
+    const gainR = ctx.createGain();
+    gainL.gain.value = 0.5;
+    gainR.gain.value = 0.5;
+
+    playbackGainNode.connect(splitter);
+    splitter.connect(gainL, 0);
+    splitter.connect(gainR, 1);
+    gainL.connect(merger, 0, 0);
+    gainR.connect(merger, 0, 0);
+    gainL.connect(merger, 0, 1);
+    gainR.connect(merger, 0, 1);
+    merger.connect(ctx.destination);
+    monoSumNode = merger;
+  } else {
+    playbackGainNode.connect(ctx.destination);
+  }
+
   fileSourceNode.connect(processorNode);
   processorNode.connect(zeroGainNode);
   zeroGainNode.connect(ctx.destination);
 
-  const clampedOffset = Math.max(0, Math.min(offsetSec, loadedAudioBuffer.duration - 0.05));
-  filePauseOffsetSec = clampedOffset;
+  const clampedOffset = Math.max(0, Math.min(startOffset, slot.audioBuffer.duration - 0.05));
+  slot.pauseOffsetSec = clampedOffset;
   filePlayStartCtxTime = ctx.currentTime - clampedOffset;
 
   fileSourceNode.onended = () => {
     if (fileIsPlaying) {
       fileIsPlaying = false;
-      filePauseOffsetSec = 0;
+      slot.pauseOffsetSec = 0;
       updatePlayPauseIcon();
     }
   };
@@ -482,9 +629,10 @@ function startFilePlayback(offsetSec = filePauseOffsetSec) {
 }
 
 function pauseFilePlayback() {
-  if (!fileIsPlaying || !audioCtx) return;
-  filePauseOffsetSec = Math.min(
-    loadedAudioBuffer.duration,
+  const slot = getSlot();
+  if (!fileIsPlaying || !audioCtx || !slot.audioBuffer) return;
+  slot.pauseOffsetSec = Math.min(
+    slot.audioBuffer.duration,
     audioCtx.currentTime - filePlayStartCtxTime
   );
   if (fileSourceNode) {
@@ -501,15 +649,16 @@ function pauseFilePlayback() {
 
 function stopFilePlayback() {
   pauseFilePlayback();
-  filePauseOffsetSec = 0;
+  getSlot().pauseOffsetSec = 0;
 }
 
 function getFilePlayheadSec() {
-  if (!loadedAudioBuffer) return 0;
+  const slot = getSlot();
+  if (!slot.audioBuffer) return 0;
   if (fileIsPlaying && audioCtx) {
-    return Math.min(loadedAudioBuffer.duration, audioCtx.currentTime - filePlayStartCtxTime);
+    return Math.min(slot.audioBuffer.duration, audioCtx.currentTime - filePlayStartCtxTime);
   }
-  return filePauseOffsetSec;
+  return slot.pauseOffsetSec;
 }
 
 function updatePlayPauseIcon() {
@@ -527,8 +676,9 @@ function setStatus(mode, label) {
 }
 
 function getActiveSnapshot() {
-  if (currentMode === 'file' && offlineAnalysisResult) {
-    const summary = offlineAnalysisResult.summary;
+  const slot = getSlot();
+  if (currentMode === 'file' && slot.analysis) {
+    const summary = slot.analysis.summary;
     if (fileIsPlaying) {
       const liveSnap = engine.getSnapshot();
       return {
@@ -538,6 +688,7 @@ function getActiveSnapshot() {
         truePeakL: liveSnap.truePeakL,
         truePeakR: liveSnap.truePeakR,
         psr: liveSnap.psr,
+        correlation: liveSnap.correlation,
       };
     }
     return summary;
@@ -565,21 +716,44 @@ function updateReadouts(snap) {
   valShortTermMax.innerHTML = formatYouleanValue(snap.shortTermMax, 'LUFS');
   valTruePeakMax.innerHTML = formatYouleanValue(snap.maxTruePeak, 'dB');
 
-  // Highlight True Peak pill if clipping
   if (snap.maxTruePeak > preset.maxTruePeak) {
     valTruePeakMax.style.color = snap.maxTruePeak > 0 ? '#ff6b6b' : '#f6ad55';
   } else {
     valTruePeakMax.style.color = '#ffffff';
   }
 
-  // Update AUTO button label with Target Delta when active
+  // Stereo Phase Correlation Meter (-1 .. +1)
+  const corr = isFinite(snap.correlation) ? snap.correlation : 1.0;
+  const pct = ((corr + 1) / 2) * 100;
+  if (phaseThumb) phaseThumb.style.left = `${Math.max(3, Math.min(97, pct))}%`;
+  if (valPhaseCorr) {
+    const sign = corr >= 0 ? '+' : '';
+    valPhaseCorr.textContent = monoCheckEnabled
+      ? 'MONO SUM'
+      : `PHASE ${sign}${corr.toFixed(2)}`;
+    valPhaseCorr.style.color = corr < -0.15 ? '#ff6b6b' : corr < 0.2 ? '#f6ad55' : '#b8c2d1';
+  }
+
+  // Streaming Normalization Gain & A/B Delta Info
   if (isFinite(snap.integrated) && snap.integrated > -70) {
-    const diff = preset.targetLUFS - snap.integrated;
-    const sign = diff > 0 ? '+' : '';
-    btnAutoScale.textContent = `${sign}${diff.toFixed(1)} LU`;
-    verdictText.title = `${preset.name} (${preset.targetLUFS} LUFS): Gain ${sign}${diff.toFixed(1)} dB | True Peak Max: ${formatDB(snap.maxTruePeak, 1)} dBTP`;
+    const gainDB = computeNormalizationGainDB(snap);
+    const sign = gainDB > 0 ? '+' : '';
+    btnAutoScale.textContent = normPreviewEnabled ? `ON (${sign}${gainDB.toFixed(1)}dB)` : `${sign}${gainDB.toFixed(1)} dB`;
+    btnNormPreview.textContent = normPreviewEnabled
+      ? `NORM ON (${sign}${gainDB.toFixed(1)} dB)`
+      : `NORM PREVIEW (${sign}${gainDB.toFixed(1)} dB)`;
+
+    const otherSlot = getOtherSlot();
+    const otherInt = otherSlot.analysis?.summary?.integrated;
+    const abText =
+      isFinite(otherInt) && otherInt > -70
+        ? ` | A/B 차이: ${(snap.integrated - otherInt > 0 ? '+' : '') + (snap.integrated - otherInt).toFixed(1)} LU`
+        : '';
+
+    verdictText.title = `${preset.name} (${preset.targetLUFS} LUFS): 노멀라이제이션 게인 ${sign}${gainDB.toFixed(1)} dB | True Peak Max: ${formatDB(snap.maxTruePeak, 1)} dBTP${abText}`;
   } else {
     btnAutoScale.textContent = 'AUTO';
+    btnNormPreview.textContent = normPreviewEnabled ? 'NORM ON' : 'NORM PREVIEW';
   }
 }
 
@@ -619,7 +793,6 @@ function renderBarMeters(snap) {
   const preset = STREAMING_PRESETS[currentPresetKey];
   const targetInt = Math.round(preset.targetLUFS);
 
-  // Build scale marks including active target (e.g. -23 or -14)
   const baseMarks = [0, -3, -6, -9, -18, -23, -27, -36, -45, -54];
   if (!baseMarks.includes(targetInt) && targetInt < 0 && targetInt > -54) {
     baseMarks.push(targetInt);
@@ -639,12 +812,10 @@ function renderBarMeters(snap) {
     const y = lufsToY(m);
     const isTarget = m === targetInt;
 
-    // Left number
     ctx.fillStyle = isTarget ? '#d8a648' : '#e5e9f0';
     ctx.textAlign = 'right';
     ctx.fillText(`${m}`, leftTickX - 4, y);
 
-    // Left tick '-'
     ctx.strokeStyle = isTarget ? '#d8a648' : '#9aa3b2';
     ctx.lineWidth = 1.3;
     ctx.beginPath();
@@ -652,35 +823,32 @@ function renderBarMeters(snap) {
     ctx.lineTo(leftTickX + 7, y);
     ctx.stroke();
 
-    // Right tick '-'
     ctx.beginPath();
     ctx.moveTo(rightTickX - 7, y);
     ctx.lineTo(rightTickX, y);
     ctx.stroke();
   }
 
-  // Draw Momentary Bar Fill (Blue below target, Red above target)
+  // Momentary Bar Fill (Blue below target, Red above target)
   const momVal = isFinite(snap.momentary) ? snap.momentary : minLUFS;
   if (momVal > minLUFS) {
     const momY = lufsToY(momVal);
     const targetY = lufsToY(preset.targetLUFS);
     const bottomY = topPad + barH;
 
-    // Blue section up to target
     const blueTopY = Math.max(momY, targetY);
     if (bottomY > blueTopY) {
       ctx.fillStyle = '#5887da';
       ctx.fillRect(barX, blueTopY, barW, bottomY - blueTopY);
     }
 
-    // Red section above target
     if (momY < targetY) {
       ctx.fillStyle = '#d95852';
       ctx.fillRect(barX, momY, barW, targetY - momY);
     }
   }
 
-  // Draw LRA Bracket [   ] around Integrated / Short-Term center
+  // LRA Bracket [   ]
   const centerRef = isFinite(snap.integrated) && snap.integrated > -54 ? snap.integrated : -31;
   const halfLRA = Math.max(2, (snap.lra || 4) / 2);
   const brkTopY = lufsToY(centerRef + halfLRA);
@@ -688,14 +856,13 @@ function renderBarMeters(snap) {
 
   ctx.strokeStyle = '#9aa3b2';
   ctx.lineWidth = 1.4;
-  // Left '['
   ctx.beginPath();
   ctx.moveTo(barX + 3, brkTopY);
   ctx.lineTo(barX - 1, brkTopY);
   ctx.lineTo(barX - 1, brkBotY);
   ctx.lineTo(barX + 3, brkBotY);
   ctx.stroke();
-  // Right ']'
+
   ctx.beginPath();
   ctx.moveTo(barX + barW - 3, brkTopY);
   ctx.lineTo(barX + barW + 1, brkTopY);
@@ -703,7 +870,7 @@ function renderBarMeters(snap) {
   ctx.lineTo(barX + barW - 3, brkBotY);
   ctx.stroke();
 
-  // White Triangle Pointer on the right (◀)
+  // White Triangle Pointer (◀)
   const ptrVal = isFinite(snap.momentary) && snap.momentary > minLUFS ? snap.momentary : minLUFS + 2;
   const ptrY = lufsToY(ptrVal);
   ctx.fillStyle = '#e5e9f0';
@@ -714,7 +881,7 @@ function renderBarMeters(snap) {
   ctx.closePath();
   ctx.fill();
 
-  // Bottom 'M' and 'LUFS' labels under the bar
+  // Bottom 'M' and 'LUFS' labels
   const footerLineY = topPad + barH + 10;
   ctx.strokeStyle = '#626875';
   ctx.lineWidth = 1.2;
@@ -758,14 +925,12 @@ function renderHistoryGraph(snap) {
   ctx.fillStyle = '#1e2128';
   ctx.fillRect(0, 0, W, H);
 
-  // Vertical layout: [Main Plot] [Time Axis Row (26px)] [Bottom Minimap Strip (34px)]
   const topPad = 14;
   const minimapH = 32;
   const timeRowH = 28;
   const botPad = minimapH + timeRowH + 8;
   const plotH = Math.max(30, H - topPad - botPad);
 
-  // Horizontal layout: [Histogram Zone (108px)] [Scale Gutter (44px)] [Time-Series Plot]
   const histAxisX = 108;
   const plotLeft = 152;
   const plotRight = W - 12;
@@ -783,7 +948,7 @@ function renderHistoryGraph(snap) {
   const targetInt = Math.round(preset.targetLUFS);
   const targetY = lufsToY(preset.targetLUFS);
 
-  // 1. Horizontal Grid Lines & Scale Labels (for both Histogram & Main Graph)
+  // 1. Horizontal Grid Lines & Scale Labels
   const baseMarks = [0, -3, -6, -9, -18, -23, -27, -36, -45, -54];
   if (!baseMarks.includes(targetInt) && targetInt < 0 && targetInt > -54) {
     baseMarks.push(targetInt);
@@ -798,7 +963,6 @@ function renderHistoryGraph(snap) {
     const isTarget = m === targetInt;
 
     if (layers.G) {
-      // Histogram grid line
       ctx.strokeStyle = 'rgba(255, 255, 255, 0.05)';
       ctx.lineWidth = 1;
       ctx.beginPath();
@@ -806,15 +970,13 @@ function renderHistoryGraph(snap) {
       ctx.lineTo(histAxisX, y);
       ctx.stroke();
 
-      // Main graph grid line
-      ctx.strokeStyle = isTarget ? 'rgba(216, 166, 72, 0.22)' : 'rgba(255, 255, 255, 0.055)';
+      ctx.strokeStyle = isTarget ? 'rgba(216, 166, 72, 0.25)' : 'rgba(255, 255, 255, 0.055)';
       ctx.beginPath();
       ctx.moveTo(plotLeft, y);
       ctx.lineTo(plotRight, y);
       ctx.stroke();
     }
 
-    // Scale number & tick at left of main graph
     ctx.fillStyle = isTarget ? '#d8a648' : '#e5e9f0';
     ctx.textAlign = 'right';
     ctx.fillText(`${m}`, plotLeft - 14, y);
@@ -827,8 +989,10 @@ function renderHistoryGraph(snap) {
     ctx.stroke();
   }
 
-  // 2. Render Loudness Distribution Histogram (Left of histAxisX)
-  const activeHist = currentMode === 'file' && offlineAnalysisResult ? offlineHistogram : liveHistogram;
+  // 2. Render Loudness Distribution Histogram
+  const slot = getSlot();
+  const isFileMode = currentMode === 'file' && Boolean(slot.analysis);
+  const activeHist = isFileMode ? slot.histogram : liveHistogram;
   let maxBinCount = 0;
   for (let i = 0; i < HIST_BINS; i++) {
     if (activeHist[i] > maxBinCount) maxBinCount = activeHist[i];
@@ -857,7 +1021,7 @@ function renderHistoryGraph(snap) {
     ctx.stroke();
   }
 
-  // Vertical Histogram Axis Line: Red above targetY, Blue below targetY!
+  // Vertical Histogram Axis Line (Red above target, Blue below target)
   ctx.lineWidth = 2;
   ctx.strokeStyle = '#d95852';
   ctx.beginPath();
@@ -872,12 +1036,11 @@ function renderHistoryGraph(snap) {
   ctx.stroke();
 
   // 3. Render Main Time-Series Loudness Graph
-  const isFileMode = currentMode === 'file' && offlineAnalysisResult;
-  const sourceTimeline = isFileMode ? offlineAnalysisResult.timeline : liveHistory;
+  const sourceTimeline = isFileMode ? slot.analysis.timeline : liveHistory;
 
   const lastTime = sourceTimeline.length > 0 ? sourceTimeline[sourceTimeline.length - 1].timeSec : 0;
   const totalDuration = isFileMode
-    ? offlineAnalysisResult.durationSec
+    ? slot.analysis.durationSec
     : Math.max(timeWindowSec || 30, lastTime);
 
   let startTime = 0;
@@ -900,13 +1063,35 @@ function renderHistoryGraph(snap) {
   const spanSec = Math.max(1, endTime - startTime);
   const timeToX = (t) => plotLeft + ((t - startTime) / spanSec) * plotW;
 
+  // Draw Other Slot (A/B Comparison) Ghost Curve if Layer D is active & other slot has data
+  const otherSlot = getOtherSlot();
+  if (layers.D && otherSlot.analysis && otherSlot.analysis.timeline.length > 1) {
+    const otherVisible = otherSlot.analysis.timeline.filter(
+      (pt) => pt.timeSec >= startTime && pt.timeSec <= endTime
+    );
+    if (otherVisible.length > 1) {
+      ctx.save();
+      ctx.beginPath();
+      for (let i = 0; i < otherVisible.length; i++) {
+        const x = timeToX(otherVisible[i].timeSec);
+        const y = lufsToY(otherVisible[i].shortTerm);
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      }
+      ctx.strokeStyle = 'rgba(216, 166, 72, 0.65)';
+      ctx.setLineDash([4, 4]);
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+      ctx.restore();
+    }
+  }
+
   if (sourceTimeline.length > 1) {
     const visible = sourceTimeline.filter((pt) => pt.timeSec >= startTime && pt.timeSec <= endTime);
 
     if (visible.length > 1) {
       const getVal = (pt) => (layers.M && !layers.S ? pt.momentary : pt.shortTerm);
 
-      // Build main loudness polygon path
       const drawCurvePath = () => {
         ctx.beginPath();
         ctx.moveTo(timeToX(visible[0].timeSec), topPad + plotH);
@@ -930,7 +1115,7 @@ function renderHistoryGraph(snap) {
       ctx.stroke();
       ctx.restore();
 
-      // Above Target Clip -> Red Fill & Stroke (Youlean over-target highlight!)
+      // Above Target Clip -> Red Fill & Stroke
       ctx.save();
       ctx.beginPath();
       ctx.rect(plotLeft, topPad, plotW, Math.max(0, targetY - topPad));
@@ -943,7 +1128,7 @@ function renderHistoryGraph(snap) {
       ctx.stroke();
       ctx.restore();
 
-      // Optional Secondary Momentary Line if both S and M are active
+      // Secondary Momentary Line if both S and M are active
       if (layers.S && layers.M) {
         ctx.beginPath();
         for (let i = 0; i < visible.length; i++) {
@@ -986,7 +1171,7 @@ function renderHistoryGraph(snap) {
     }
   }
 
-  // 4. Time Axis Labels (e.g. 18s, 20s, 22s, 24s, 26s, 28s)
+  // 4. Time Axis Labels
   const timeLabelY = topPad + plotH + 16;
   ctx.fillStyle = '#e5e9f0';
   ctx.font = '600 12.5px "Open Sans", sans-serif';
@@ -1002,12 +1187,11 @@ function renderHistoryGraph(snap) {
     ctx.fillText(label, tx, timeLabelY);
   }
 
-  // 5. Bottom Minimap Timeline Strip (Exact Youlean Bottom Overview Bar!)
+  // 5. Bottom Minimap Timeline Strip
   const miniTop = H - minimapH - 4;
   const miniLeft = plotLeft - 36;
   const miniW = plotRight - miniLeft;
 
-  // Minimap left bracket '['
   ctx.strokeStyle = '#5c6270';
   ctx.lineWidth = 1.2;
   ctx.beginPath();
@@ -1017,7 +1201,6 @@ function renderHistoryGraph(snap) {
   ctx.lineTo(miniLeft + 4, miniTop + minimapH - 2);
   ctx.stroke();
 
-  // Minimap full-session loudness blocks in slate-blue (#4b6898)
   if (sourceTimeline.length > 1) {
     const fullDur = Math.max(1, sourceTimeline[sourceTimeline.length - 1].timeSec);
     ctx.beginPath();
@@ -1041,7 +1224,6 @@ function renderHistoryGraph(snap) {
     ctx.stroke();
   }
 
-  // Minimap Viewport Box on the right (like the gray bordered box in the screenshot)
   const vpBoxW = Math.min(185, miniW * 0.34);
   const vpBoxX = plotRight - vpBoxW;
   ctx.fillStyle = 'rgba(70, 75, 87, 0.65)';
@@ -1101,6 +1283,192 @@ function renderHistoryGraph(snap) {
   ctx.restore();
 }
 
+// ================= PRO EXPORT SUITE: PNG IMAGE / CSV / JSON =================
+function exportPNGImage() {
+  const snap = getActiveSnapshot();
+  const preset = STREAMING_PRESETS[currentPresetKey];
+  const slot = getSlot();
+  const trackName = slot.fileName || (currentMode === 'live' ? 'Live Audio Session' : 'Audio Measurement');
+
+  const W = 1600;
+  const H = 900;
+  const canvas = document.createElement('canvas');
+  canvas.width = W;
+  canvas.height = H;
+  const ctx = canvas.getContext('2d');
+
+  // 1. Background & Top Header
+  ctx.fillStyle = '#1e2128';
+  ctx.fillRect(0, 0, W, H);
+
+  ctx.fillStyle = '#e2e3e6';
+  ctx.fillRect(0, 0, W, 56);
+  ctx.fillRect(0, H - 48, W, 48);
+
+  ctx.fillStyle = '#1c1e24';
+  ctx.font = '800 24px "Open Sans", sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText('Vibe Loudness Meter — Loudness Compliance Report', W / 2, 28);
+
+  // Track & Preset info in header
+  ctx.font = '700 14px "Open Sans", sans-serif';
+  ctx.textAlign = 'left';
+  ctx.fillText(`FILE: ${trackName} (Slot ${activeSlotKey})`, 20, 28);
+  ctx.textAlign = 'right';
+  ctx.fillText(`TARGET: ${preset.name} (${preset.targetLUFS} LUFS / ${preset.maxTruePeak} dBTP)`, W - 20, 28);
+
+  // 2. Draw Left Bar Meter Canvas Snapshot
+  ctx.drawImage(barMeterCanvas, 16, 68, 150, H - 130);
+
+  // 3. Draw Center-Left Readout Cards
+  const rx = 182;
+  const rw = 240;
+  ctx.fillStyle = '#363c48';
+  ctx.fillRect(rx, 74, rw, 390);
+  ctx.fillStyle = '#626f82';
+  ctx.fillRect(rx, 74 + 78, rw, 78);
+
+  const stackRows = [
+    { val: `${formatLUFS(snap.shortTerm, 1)} LUFS`, lbl: 'SHORT TERM' },
+    { val: `${formatLUFS(snap.integrated, 1)} LUFS`, lbl: 'INTEGRATED' },
+    { val: `${snap.lra.toFixed(1)} LU`, lbl: 'LOUDNESS RANGE' },
+    { val: isFinite(snap.psr) && snap.psr > 0 ? `${snap.psr.toFixed(1)} LU` : '-', lbl: 'DYNAMICS (PSR)' },
+    { val: isFinite(snap.plr) && snap.plr > 0 ? `${snap.plr.toFixed(1)} LU` : '-', lbl: 'AVG. DYNAMICS (PLR)' },
+  ];
+
+  stackRows.forEach((r, idx) => {
+    const cy = 74 + idx * 78 + 39;
+    ctx.fillStyle = '#ffffff';
+    ctx.font = '700 28px "Open Sans", sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText(r.val, rx + rw / 2, cy - 8);
+
+    ctx.fillStyle = '#d8dee9';
+    ctx.font = '600 13px "Open Sans", sans-serif';
+    ctx.fillText(r.lbl, rx + rw / 2, cy + 20);
+  });
+
+  // 3 Pills
+  const pills = [
+    { val: `${formatLUFS(snap.momentaryMax, 1)} LUFS`, lbl: 'MOMENTARY MAX' },
+    { val: `${formatLUFS(snap.shortTermMax, 1)} LUFS`, lbl: 'SHORT TERM MAX' },
+    { val: `${formatDB(snap.maxTruePeak, 1)} dBTP`, lbl: 'TRUE PEAK MAX' },
+  ];
+
+  pills.forEach((p, idx) => {
+    const py = 490 + idx * 82;
+    ctx.fillStyle = '#363c48';
+    ctx.beginPath();
+    ctx.roundRect(rx + 10, py, rw - 20, 46, 23);
+    ctx.fill();
+
+    ctx.fillStyle = '#ffffff';
+    ctx.font = '700 24px "Open Sans", sans-serif';
+    ctx.fillText(p.val, rx + rw / 2, py + 24);
+
+    ctx.fillStyle = '#d0d6e0';
+    ctx.font = '600 12px "Open Sans", sans-serif';
+    ctx.fillText(p.lbl, rx + rw / 2, py + 62);
+  });
+
+  // 4. Draw Main History & Histogram Canvas
+  ctx.drawImage(historyCanvas, 440, 68, W - 456, H - 130);
+
+  // 5. Bottom Footer Summary
+  const gainDB = computeNormalizationGainDB(snap);
+  const sign = gainDB > 0 ? '+' : '';
+  ctx.fillStyle = '#1c1e24';
+  ctx.font = '700 14px "Open Sans", sans-serif';
+  ctx.textAlign = 'left';
+  ctx.fillText(
+    `Normalization Gain (${preset.name}): ${sign}${gainDB.toFixed(1)} dB   |   Phase Correlation: ${(snap.correlation ?? 1).toFixed(2)}   |   True Peak Clips: ${snap.clipCount}`,
+    20,
+    H - 24
+  );
+  ctx.textAlign = 'right';
+  ctx.fillText(`Generated: ${new Date().toLocaleString()}`, W - 20, H - 24);
+
+  canvas.toBlob((blob) => {
+    if (!blob) return;
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `vibe-loudness-report-${Date.now()}.png`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }, 'image/png');
+}
+
+function exportCSVTimeline() {
+  const slot = getSlot();
+  const isFileMode = currentMode === 'file' && Boolean(slot.analysis);
+  const timeline = isFileMode ? slot.analysis.timeline : liveHistory;
+
+  if (!timeline || timeline.length === 0) {
+    alert('내보낼 타임라인 측정 데이터가 없습니다.');
+    return;
+  }
+
+  const lines = ['Time_Sec,Momentary_LUFS,ShortTerm_LUFS,Integrated_LUFS,TruePeak_L_dBTP,TruePeak_R_dBTP'];
+  for (const pt of timeline) {
+    lines.push(
+      [
+        pt.timeSec.toFixed(2),
+        isFinite(pt.momentary) ? pt.momentary.toFixed(2) : '',
+        isFinite(pt.shortTerm) ? pt.shortTerm.toFixed(2) : '',
+        isFinite(pt.integrated) ? pt.integrated.toFixed(2) : '',
+        isFinite(pt.truePeakL) ? pt.truePeakL.toFixed(2) : '',
+        isFinite(pt.truePeakR) ? pt.truePeakR.toFixed(2) : '',
+      ].join(',')
+    );
+  }
+
+  const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `vibe-loudness-timeline-${Date.now()}.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function exportLoudnessReport() {
+  const snap = getActiveSnapshot();
+  const preset = STREAMING_PRESETS[currentPresetKey];
+  const slot = getSlot();
+  const report = {
+    generatedAt: new Date().toISOString(),
+    application: 'Vibe Loudness Meter',
+    standard: 'ITU-R BS.1770-4 / EBU R128',
+    activeSlot: activeSlotKey,
+    sourceMode: currentMode,
+    fileName: slot.fileName || null,
+    targetPreset: preset,
+    normalizationGainDB: Number(computeNormalizationGainDB(snap).toFixed(2)),
+    metrics: {
+      integratedLUFS: isFinite(snap.integrated) ? Number(snap.integrated.toFixed(2)) : null,
+      shortTermMaxLUFS: isFinite(snap.shortTermMax) ? Number(snap.shortTermMax.toFixed(2)) : null,
+      momentaryMaxLUFS: isFinite(snap.momentaryMax) ? Number(snap.momentaryMax.toFixed(2)) : null,
+      loudnessRangeLU: Number(snap.lra.toFixed(2)),
+      truePeakMaxDBTP: isFinite(snap.maxTruePeak) ? Number(snap.maxTruePeak.toFixed(2)) : null,
+      plrLU: isFinite(snap.plr) ? Number(snap.plr.toFixed(2)) : null,
+      psrLU: isFinite(snap.psr) ? Number(snap.psr.toFixed(2)) : null,
+      phaseCorrelation: Number((snap.correlation ?? 1).toFixed(2)),
+      truePeakClips: snap.clipCount,
+      durationSec: Number(snap.durationSec.toFixed(2)),
+    },
+  };
+
+  const blob = new Blob([JSON.stringify(report, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `vibe-loudness-report-${Date.now()}.json`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
 // ================= ALWAYS-ON-TOP (DOCUMENT PICTURE-IN-PICTURE) =================
 async function toggleAlwaysOnTopPiP() {
   if ('documentPictureInPicture' in window) {
@@ -1148,38 +1516,6 @@ async function toggleAlwaysOnTopPiP() {
   btnMiniMode.classList.toggle('active', document.body.classList.contains('mini-mode'));
 }
 
-// ================= EXPORT REPORT =================
-function exportLoudnessReport() {
-  const snap = getActiveSnapshot();
-  const preset = STREAMING_PRESETS[currentPresetKey];
-  const report = {
-    generatedAt: new Date().toISOString(),
-    standard: 'ITU-R BS.1770-4 / EBU R128',
-    sourceMode: currentMode,
-    fileName: loadedFileName || null,
-    targetPreset: preset,
-    metrics: {
-      integratedLUFS: isFinite(snap.integrated) ? Number(snap.integrated.toFixed(2)) : null,
-      shortTermMaxLUFS: isFinite(snap.shortTermMax) ? Number(snap.shortTermMax.toFixed(2)) : null,
-      momentaryMaxLUFS: isFinite(snap.momentaryMax) ? Number(snap.momentaryMax.toFixed(2)) : null,
-      loudnessRangeLU: Number(snap.lra.toFixed(2)),
-      truePeakMaxDBTP: isFinite(snap.maxTruePeak) ? Number(snap.maxTruePeak.toFixed(2)) : null,
-      plrLU: isFinite(snap.plr) ? Number(snap.plr.toFixed(2)) : null,
-      psrLU: isFinite(snap.psr) ? Number(snap.psr.toFixed(2)) : null,
-      truePeakClips: snap.clipCount,
-      durationSec: Number(snap.durationSec.toFixed(2)),
-    },
-  };
-
-  const blob = new Blob([JSON.stringify(report, null, 2)], { type: 'application/json' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = `loudness-report-${Date.now()}.json`;
-  a.click();
-  URL.revokeObjectURL(url);
-}
-
 // ================= HELPERS & EVENT LISTENERS =================
 function formatTime(sec) {
   if (!isFinite(sec) || sec < 0) return '0s';
@@ -1193,13 +1529,32 @@ function resetMeters() {
   engine.reset();
   liveHistory = [];
   liveHistogram.fill(0);
+  const slot = getSlot();
   if (currentMode === 'file' && !fileIsPlaying) {
-    offlineAnalysisResult = null;
-    offlineHistogram.fill(0);
-    loadedAudioBuffer = null;
-    loadedFileName = '';
+    slot.analysis = null;
+    slot.histogram.fill(0);
+    slot.audioBuffer = null;
+    slot.fileName = '';
+    slot.pauseOffsetSec = 0;
+    updateABButtonsUI();
     setStatus('standby', '');
-    fileMetaInfo.textContent = 'READY';
+    fileMetaInfo.textContent = `SLOT ${activeSlotKey}: READY`;
+  }
+}
+
+function toggleNormPreview() {
+  normPreviewEnabled = !normPreviewEnabled;
+  btnNormPreview.classList.toggle('active', normPreviewEnabled);
+  if (btnFloatAudio) btnFloatAudio.classList.toggle('active-red', normPreviewEnabled);
+  applyRealtimePlaybackRouting();
+}
+
+function toggleMonoCheck() {
+  monoCheckEnabled = !monoCheckEnabled;
+  btnMonoCheck.classList.toggle('active', monoCheckEnabled);
+  if (fileIsPlaying) {
+    const curSec = getFilePlayheadSec();
+    startFilePlayback(curSec);
   }
 }
 
@@ -1213,6 +1568,10 @@ deviceSelect.addEventListener('change', () => {
 btnSystemAudio.addEventListener('click', startSystemAudioCapture);
 btnTestTone.addEventListener('click', toggleReferenceTone);
 
+btnNormPreview.addEventListener('click', toggleNormPreview);
+btnAutoScale.addEventListener('click', toggleNormPreview);
+btnMonoCheck.addEventListener('click', toggleMonoCheck);
+
 fileInput.addEventListener('change', (e) => {
   const file = e.target.files?.[0];
   if (file) handleFileLoad(file);
@@ -1221,6 +1580,7 @@ fileInput.addEventListener('change', (e) => {
 
 presetSelect.addEventListener('change', (e) => {
   currentPresetKey = e.target.value;
+  applyRealtimePlaybackRouting();
 });
 
 btnReset.addEventListener('click', resetMeters);
@@ -1231,7 +1591,31 @@ btnMiniMode.addEventListener('click', () => {
 });
 
 btnPiP.addEventListener('click', toggleAlwaysOnTopPiP);
-btnExport.addEventListener('click', exportLoudnessReport);
+
+// Export Menu Listeners
+btnExport.addEventListener('click', (e) => {
+  e.stopPropagation();
+  exportMenu.classList.toggle('hidden');
+});
+btnExportPNG.addEventListener('click', () => {
+  exportMenu.classList.add('hidden');
+  exportPNGImage();
+});
+btnExportCSV.addEventListener('click', () => {
+  exportMenu.classList.add('hidden');
+  exportCSVTimeline();
+});
+btnExportJSON.addEventListener('click', () => {
+  exportMenu.classList.add('hidden');
+  exportLoudnessReport();
+});
+window.addEventListener('click', () => {
+  if (exportMenu) exportMenu.classList.add('hidden');
+});
+
+// A / B Slot Listeners
+btnSlotA.addEventListener('click', () => switchABSlot('A'));
+btnSlotB.addEventListener('click', () => switchABSlot('B'));
 
 windowSelector.addEventListener('change', (e) => {
   timeWindowSec = Number(e.target.value);
@@ -1252,9 +1636,8 @@ document.querySelectorAll('.ylm-circle-toggle').forEach((btn) => {
   });
 });
 
-// Floating graph buttons
 if (btnFloatAudio) {
-  btnFloatAudio.addEventListener('click', toggleReferenceTone);
+  btnFloatAudio.addEventListener('click', toggleNormPreview);
 }
 if (btnFloatPeaks) {
   btnFloatPeaks.addEventListener('click', () => {
@@ -1270,16 +1653,17 @@ if (btnFloatTarget) {
 }
 
 btnPlayPause.addEventListener('click', () => {
-  if (loadedAudioBuffer) {
+  const slot = getSlot();
+  if (slot.audioBuffer) {
     if (fileIsPlaying) pauseFilePlayback();
-    else startFilePlayback(filePauseOffsetSec);
+    else startFilePlayback(slot.pauseOffsetSec);
   } else {
     startLiveDeviceInput();
   }
 });
 
 btnStopFile.addEventListener('click', () => {
-  if (loadedAudioBuffer) stopFilePlayback();
+  if (getSlot().audioBuffer) stopFilePlayback();
   else stopAllActiveAudio();
 });
 
@@ -1293,7 +1677,8 @@ historyCanvas.addEventListener('mouseleave', () => {
 });
 
 historyCanvas.addEventListener('click', (e) => {
-  if (currentMode !== 'file' || !loadedAudioBuffer || !offlineAnalysisResult) return;
+  const slot = getSlot();
+  if (currentMode !== 'file' || !slot.audioBuffer || !slot.analysis) return;
   const rect = historyCanvas.getBoundingClientRect();
   const plotLeft = 152;
   const plotRight = rect.width - 12;
@@ -1302,8 +1687,8 @@ historyCanvas.addEventListener('click', (e) => {
   if (clickX < plotLeft || clickX > plotRight) return;
 
   const ratio = (clickX - plotLeft) / plotW;
-  const targetSec = ratio * loadedAudioBuffer.duration;
-  filePauseOffsetSec = targetSec;
+  const targetSec = ratio * slot.audioBuffer.duration;
+  slot.pauseOffsetSec = targetSec;
   if (fileIsPlaying) {
     startFilePlayback(targetSec);
   }
@@ -1329,13 +1714,19 @@ window.addEventListener('drop', (e) => {
 
 window.addEventListener('keydown', (e) => {
   if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
-  if (e.code === 'Space' && loadedAudioBuffer) {
+  if (e.code === 'Space' && getSlot().audioBuffer) {
     e.preventDefault();
     btnPlayPause.click();
   } else if (e.key === 'r' || e.key === 'R') {
     resetMeters();
   } else if (e.key === 'm' || e.key === 'M') {
     btnMiniMode.click();
+  } else if (e.key === 'n' || e.key === 'N') {
+    toggleNormPreview();
+  } else if (e.key === 'a' || e.key === 'A') {
+    switchABSlot('A');
+  } else if (e.key === 'b' || e.key === 'B') {
+    switchABSlot('B');
   }
 });
 
