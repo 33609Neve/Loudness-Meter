@@ -3,280 +3,275 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-  <meta name="theme-color" content="#11151c" />
+  <meta name="theme-color" content="#1e2128" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-  <meta name="apple-mobile-web-app-title" content="ULM Pro" />
+  <meta name="apple-mobile-web-app-title" content="Youlean Web Meter" />
   <link rel="manifest" href="./manifest.webmanifest" />
   <link rel="icon" type="image/svg+xml" href="./icon.svg" />
   <link rel="apple-touch-icon" href="./icon.svg" />
-  <title>ULM Pro — Loudness & True Peak Meter</title>
-  <!-- High-legibility UI & Tabular Monospace Fonts -->
+  <title>YOULEAN LOUDNESS METER 2 — Web Standalone</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@500;600;700;800&family=JetBrains+Mono:wght@500;600;700;800&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard-dynamic-subset.min.css" />
+  <link href="https://fonts.googleapis.com/css2?family=Open+Sans:wght@400;600;700;800&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="./styles.css" />
 </head>
 <body>
-  <div id="app" class="app-shell">
-    <!-- TOP HEADER: Clean 3-Zone Bar -->
-    <header class="topbar">
-      <!-- Zone 1: Brand + Live Status -->
-      <div class="brand-group">
-        <div class="brand-logo">
-          <span class="logo-dot"></span>
-          <span class="logo-title">ULM<span class="logo-accent">PRO</span></span>
-        </div>
-        <div id="statusBadge" class="status-badge standby">
-          <span class="status-led"></span>
-          <span id="statusText">STANDBY</span>
-        </div>
+  <div id="app" class="ylm-app">
+    <!-- ================= TOP LIGHT HEADER BAR ================= -->
+    <header class="ylm-topbar">
+      <div class="ylm-top-left">
+        <!-- Mini View Toggle (Window Sidebar Icon) -->
+        <button id="btnMiniMode" class="ylm-icon-btn" title="미니 미터 뷰 전환 (단축키: M)">
+          <svg width="20" height="17" viewBox="0 0 22 18" fill="none" stroke="currentColor" stroke-width="2">
+            <rect x="1" y="1" width="20" height="16" rx="2"/>
+            <line x1="8" y1="1" x2="8" y2="17"/>
+            <path d="M5.5 6.5L3.5 9L5.5 11.5" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </button>
+
+        <!-- Lock / Always-on-Top PiP Icon -->
+        <button id="btnPiP" class="ylm-icon-btn" title="항상 위(Always on Top) 미니 창 띄우기">
+          <svg width="17" height="18" viewBox="0 0 24 24" fill="currentColor">
+            <path d="M18 8h-1V6c0-2.76-2.24-5-5-5S7 3.24 7 6v2H6c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V10c0-1.1-.9-2-2-2zM9 6c0-1.66 1.34-3 3-3s3 1.34 3 3v2H9V6z"/>
+          </svg>
+        </button>
+
+        <!-- Green Pill & Quick Live Audio Buttons -->
+        <button id="btnLiveInput" class="ylm-green-pill" title="마이크 / 오디오 인터페이스 / BlackHole 실시간 입력">
+          LIVE INPUT
+        </button>
+        <button id="btnSystemAudio" class="ylm-top-pill" title="macOS 시스템/화면/탭 오디오 직접 캡처">
+          SYSTEM AUDIO
+        </button>
+        <button id="btnTestTone" class="ylm-top-pill" title="-14.0 LUFS 기준 테스트 신호">
+          -14 LUFS TONE
+        </button>
       </div>
 
-      <!-- Zone 2: Unified Audio Source Pill Bar -->
-      <div class="source-controls">
-        <div class="source-pill-group">
-          <button id="btnLiveInput" class="btn-source-tab" title="오디오 인터페이스, 마이크, BlackHole 입력 측정">
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
-              <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
-              <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
-              <line x1="12" y1="19" x2="12" y2="23"/>
-            </svg>
-            <span>오디오 입력</span>
-          </button>
-
-          <button id="btnSystemAudio" class="btn-source-tab" title="macOS 시스템 오디오 또는 브라우저 탭 소리 캡처">
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
-              <rect x="2" y="3" width="20" height="14" rx="2" ry="2"/>
-              <line x1="8" y1="21" x2="16" y2="21"/>
-              <line x1="12" y1="17" x2="12" y2="21"/>
-            </svg>
-            <span>시스템 오디오</span>
-          </button>
-
-          <label for="fileInput" class="btn-source-tab" title="WAV, MP3, FLAC 파일 열기 또는 드래그 앤 드롭">
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
-              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
-              <polyline points="14 2 14 8 20 8"/>
-            </svg>
-            <span>파일 열기</span>
-            <input id="fileInput" type="file" accept="audio/*,.wav,.mp3,.flac,.ogg,.m4a,.aac,.aiff" hidden />
-          </label>
-
-          <button id="btnTestTone" class="btn-source-tab" title="-14.0 LUFS 보정 기준음 테스트">
-            <span>-14 LUFS 톤</span>
-          </button>
-        </div>
-
-        <select id="deviceSelect" class="select-device" title="오디오 입력 장치 선택">
-          <option value="">기본 오디오 입력 장치</option>
-        </select>
+      <!-- Center Title -->
+      <div class="ylm-title-wrap">
+        <span class="ylm-brand-bold">YOULEAN</span>
+        <span class="ylm-brand-light">LOUDNESS METER 2</span>
+        <sup class="ylm-brand-sup" id="statusText">WEB</sup>
       </div>
 
-      <!-- Zone 3: Target Preset & Utility Buttons -->
-      <div class="action-controls">
-        <div class="preset-box">
-          <span class="preset-tag">TARGET</span>
-          <select id="presetSelect" class="select-preset" title="스트리밍/방송 기준 프리셋">
-            <option value="spotify">Spotify (-14 LUFS / -1.0 dBTP)</option>
-            <option value="youtube">YouTube (-14 LUFS / -1.0 dBTP)</option>
-            <option value="apple">Apple Music (-16 LUFS / -1.0 dBTP)</option>
-            <option value="tidal">Tidal / Amazon (-14 LUFS / -1.0 dBTP)</option>
-            <option value="ebu">EBU R128 방송 (-23 LUFS / -1.0 dBTP)</option>
-            <option value="atsc">ATSC A/85 TV (-24 LKFS / -2.0 dBTP)</option>
-            <option value="netflix">Netflix (-27 LKFS / -2.0 dBTP)</option>
-            <option value="podcast">Podcast (-16 LUFS / -1.0 dBTP)</option>
-            <option value="club">Club / Master (-8 LUFS / -0.3 dBTP)</option>
-          </select>
-        </div>
+      <!-- Right Files & Utility Icons -->
+      <div class="ylm-top-right">
+        <button id="btnInstallPWA" class="ylm-top-pill hidden" title="독/바탕화면에 앱으로 설치">
+          INSTALL APP
+        </button>
 
-        <button id="btnReset" class="btn-util" title="측정값 초기화 (단축키: R)">초기화</button>
-        <button id="btnMiniMode" class="btn-util" title="미니 뷰 전환 (단축키: M)">미니 뷰</button>
-        <button id="btnPiP" class="btn-util btn-pip" title="항상 위(Always on Top) 미니 창 띄우기">항상 위</button>
-        <button id="btnExport" class="btn-util" title="측정 결과 JSON 저장">저장</button>
-        <button id="btnInstallPWA" class="btn-util btn-install hidden" title="독/바탕화면에 앱으로 설치">앱 설치</button>
+        <label for="fileInput" class="ylm-files-btn" title="오디오 파일(WAV, MP3, FLAC 등) 열기 또는 드래그 앤 드롭">
+          <span>FILES</span>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+            <polyline points="14 2 14 8 20 8"/>
+            <line x1="12" y1="12" x2="12" y2="18"/>
+            <line x1="9" y1="15" x2="15" y2="15"/>
+          </svg>
+          <input id="fileInput" type="file" accept="audio/*,.wav,.mp3,.flac,.ogg,.m4a,.aac,.aiff" hidden />
+        </label>
+
+        <!-- Export Report Icon -->
+        <button id="btnExport" class="ylm-icon-btn" title="측정 리포트(JSON) 내보내기">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+            <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>
+            <polyline points="15 3 21 3 21 9"/>
+            <line x1="10" y1="14" x2="21" y2="3"/>
+          </svg>
+        </button>
+
+        <!-- Settings / Audio Stop Icon -->
+        <button id="btnStopFile" class="ylm-icon-btn" title="오디오 정지">
+          <svg width="19" height="19" viewBox="0 0 24 24" fill="currentColor">
+            <path d="M19.14,12.94c0.04-0.3,0.06-0.61,0.06-0.94c0-0.32-0.02-0.64-0.07-0.94l2.03-1.58c0.18-0.14,0.23-0.41,0.12-0.61 l-1.92-3.32c-0.12-0.22-0.37-0.29-0.59-0.22l-2.39,0.96c-0.5-0.38-1.03-0.7-1.62-0.94L14.4,2.81c-0.04-0.24-0.24-0.41-0.48-0.41 h-3.84c-0.24,0-0.43,0.17-0.47,0.41L9.25,5.35C8.66,5.59,8.12,5.92,7.63,6.29L5.24,5.33c-0.22-0.08-0.47,0-0.59,0.22L2.74,8.87 C2.62,9.08,2.66,9.34,2.86,9.48l2.03,1.58C4.84,11.36,4.8,11.69,4.8,12s0.02,0.64,0.07,0.94l-2.03,1.58 c-0.18,0.14-0.23,0.41-0.12,0.61l1.92,3.32c0.12,0.22,0.37,0.29,0.59,0.22l2.39-0.96c0.5,0.38,1.03,0.7,1.62,0.94l0.36,2.54 c0.05,0.24,0.24,0.41,0.48,0.41h3.84c0.24,0,0.44-0.17,0.47-0.41l0.36-2.54c0.59-0.24,1.13-0.56,1.62-0.94l2.39,0.96 c0.22,0.08,0.47,0,0.59-0.22l1.92-3.32c0.12-0.22,0.07-0.47-0.12-0.61L19.14,12.94z M12,15.6c-1.98,0-3.6-1.62-3.6-3.6 s1.62-3.6,3.6-3.6s3.6,1.62,3.6,3.6S13.98,15.6,12,15.6z"/>
+          </svg>
+        </button>
       </div>
     </header>
 
-    <!-- MAIN WORKSPACE: 3 Clear Columns -->
-    <main id="meterContainer" class="workspace">
-      <!-- LEFT COLUMN: Big, Unmistakable Readouts (Youlean Style) -->
-      <section class="readouts-panel">
-        <!-- 1. INTEGRATED (Primary Hero Number) -->
-        <div class="readout-block hero-block" id="cardIntegrated">
-          <div class="readout-top">
-            <span class="readout-label">INTEGRATED</span>
-            <span class="delta-pill" id="valTargetDelta">목표 <span id="lblTargetLUFS">-14.0</span></span>
-          </div>
-          <div class="readout-main-row">
-            <span class="readout-number-xl" id="valIntegrated">-∞</span>
-            <span class="readout-unit-xl">LUFS</span>
-          </div>
-        </div>
-
-        <!-- 2. SHORT-TERM (3s) -->
-        <div class="readout-block">
-          <div class="readout-top">
-            <span class="readout-label">SHORT-TERM <em>3s</em></span>
-            <span class="readout-max">MAX <strong id="valShortTermMax">-∞</strong></span>
-          </div>
-          <div class="readout-main-row">
-            <span class="readout-number-lg" id="valShortTerm">-∞</span>
-            <span class="readout-unit">LUFS</span>
-          </div>
-        </div>
-
-        <!-- 3. MOMENTARY (400ms) -->
-        <div class="readout-block">
-          <div class="readout-top">
-            <span class="readout-label">MOMENTARY <em>400ms</em></span>
-            <span class="readout-max">MAX <strong id="valMomentaryMax">-∞</strong></span>
-          </div>
-          <div class="readout-main-row">
-            <span class="readout-number-lg" id="valMomentary">-∞</span>
-            <span class="readout-unit">LUFS</span>
-          </div>
-        </div>
-
-        <!-- 4. TRUE PEAK MAX (4x Oversampled) -->
-        <div class="readout-block tp-block" id="cardTruePeak">
-          <div class="readout-top">
-            <span class="readout-label">TRUE PEAK MAX</span>
-            <span class="clip-indicator" id="clipBadge">SAFE</span>
-          </div>
-          <div class="readout-main-row">
-            <span class="readout-number-lg" id="valTruePeakMax">-∞</span>
-            <span class="readout-unit">dBTP</span>
-          </div>
-          <div class="readout-foot">
-            <span>L/R <strong id="valTPL">-∞</strong> / <strong id="valTPR">-∞</strong></span>
-            <span>제한 <strong id="lblCeilingTP">-1.0</strong> · <span id="valClipCount">0 clips</span></span>
-          </div>
-        </div>
-
-        <!-- 5. LRA & PLR Side-by-Side -->
-        <div class="readout-split">
-          <div class="readout-block split-block">
-            <div class="readout-top">
-              <span class="readout-label">LRA <em>범위</em></span>
-            </div>
-            <div class="readout-main-row">
-              <span class="readout-number-md" id="valLRA">0.0</span>
-              <span class="readout-unit">LU</span>
-            </div>
-            <div class="readout-foot-single" id="valDynamicsTag">다이내믹스 대기</div>
-          </div>
-
-          <div class="readout-block split-block">
-            <div class="readout-top">
-              <span class="readout-label">PLR <em>크레스트</em></span>
-            </div>
-            <div class="readout-main-row">
-              <span class="readout-number-md" id="valPLR">--</span>
-              <span class="readout-unit">LU</span>
-            </div>
-            <div class="readout-foot-single">SPK <span id="valSamplePeak">-∞ dB</span></div>
-          </div>
-        </div>
-
-        <!-- 6. Concise Streaming Verdict Box -->
-        <div class="verdict-card" id="verdictCard">
-          <div class="verdict-title">
-            <span id="verdictPresetName">Spotify</span> 라우드니스 판정
-          </div>
-          <div class="verdict-body" id="verdictText">
-            오디오를 입력하거나 파일을 드롭하면 스트리밍 볼륨 변화를 즉시 진단합니다.
-          </div>
-        </div>
-      </section>
-
-      <!-- CENTER COLUMN: Loudness Distribution Graph & Transport -->
-      <section class="graph-panel" id="dropZone">
-        <div class="graph-toolbar">
-          <div class="graph-legend">
-            <span class="legend-pill"><i class="dot dot-st"></i>Short-Term</span>
-            <span class="legend-pill"><i class="dot dot-m"></i>Momentary</span>
-            <span class="legend-pill"><i class="dot dot-int"></i>Integrated</span>
-            <span class="legend-pill"><i class="dot dot-target"></i>목표 (<span id="graphTargetLabel">-14</span> LUFS)</span>
-            <span class="legend-pill"><i class="dot dot-tp"></i>피크 초과</span>
-          </div>
-
-          <div class="graph-controls">
-            <div class="segmented-btns" id="windowSelector">
-              <button class="seg-btn" data-sec="30">30초</button>
-              <button class="seg-btn active" data-sec="60">1분</button>
-              <button class="seg-btn" data-sec="300">5분</button>
-              <button class="seg-btn" data-sec="0" id="btnFullFileWindow">전체 곡</button>
-            </div>
-            <button id="btnPauseGraph" class="btn-tiny">일시정지</button>
-          </div>
-        </div>
-
-        <div class="canvas-container">
-          <canvas id="historyCanvas"></canvas>
-
-          <div id="dropOverlay" class="drop-overlay hidden">
-            <div class="drop-box">
-              <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
-                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
-                <polyline points="17 8 12 3 7 8"/>
-                <line x1="12" y1="3" x2="12" y2="15"/>
-              </svg>
-              <h3>오디오 파일을 여기에 놓으세요</h3>
-              <p>WAV, MP3, FLAC, M4A, OGG — 드롭 즉시 전체 구간 초고속 분석</p>
-            </div>
-          </div>
-        </div>
-
-        <div class="transport-bar" id="transportBar">
-          <div class="transport-left">
-            <button id="btnPlayPause" class="btn-transport" disabled title="재생 / 일시정지 (Space)">
-              <svg id="iconPlay" width="15" height="15" viewBox="0 0 24 24" fill="currentColor">
-                <polygon points="5 3 19 12 5 21 5 3"/>
-              </svg>
-            </button>
-            <button id="btnStopFile" class="btn-transport" disabled title="정지">
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor">
-                <rect x="4" y="4" width="16" height="16" rx="2"/>
-              </svg>
-            </button>
-            <span class="time-readout">
-              <strong id="curTime">00:00.0</strong> / <span id="totTime">00:00.0</span>
-            </span>
-          </div>
-
-          <div class="transport-scrubber">
-            <input id="seekSlider" type="range" min="0" max="1000" value="0" disabled />
-          </div>
-
-          <div class="transport-meta" id="fileMetaInfo">
-            오디오 입력 대기 중
-          </div>
-        </div>
-      </section>
-
-      <!-- RIGHT COLUMN: Wide Studio Bar Meters (M / S / TP L-R) -->
-      <section class="bars-panel">
-        <div class="bars-header">
-          <span>M / S</span>
-          <span>TRUE PEAK</span>
-        </div>
-        <div class="bars-canvas-wrap">
+    <!-- ================= MAIN DARK METER WORKSPACE ================= -->
+    <main id="meterContainer" class="ylm-main">
+      <!-- COLUMN 1: Left LUFS Vertical Bar Meter -->
+      <section class="ylm-col-bar">
+        <div class="ylm-bar-canvas-wrap">
           <canvas id="barMeterCanvas"></canvas>
         </div>
-        <div class="bars-footer">
-          <div class="bar-footer-box">
-            <span class="bar-footer-lbl">MOMENTARY</span>
-            <span class="bar-footer-val" id="barFooterLUFS">-∞</span>
+        <div class="ylm-bar-bottom">
+          <button id="btnPlayPause" class="ylm-blue-circle-btn" title="오디오 파일 재생 / 일시정지 (Space)">
+            <svg id="iconPlay" width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+              <polygon points="3 5 13 12 3 19 3 5"/>
+              <polygon points="13 5 23 12 13 19 13 5"/>
+            </svg>
+          </button>
+          <button id="btnIntLra" class="ylm-blue-pill-btn">INT-LRA</button>
+        </div>
+      </section>
+
+      <!-- COLUMN 2: Center-Left Readout Stack & Pills -->
+      <section class="ylm-col-readouts">
+        <!-- 5-Row Slate Stack -->
+        <div class="ylm-slate-stack">
+          <div class="ylm-slate-row">
+            <div class="ylm-val" id="valShortTerm">-</div>
+            <div class="ylm-lbl">SHORT TERM</div>
           </div>
-          <div class="bar-footer-box">
-            <span class="bar-footer-lbl">PEAK dBTP</span>
-            <span class="bar-footer-val" id="barFooterTP">-∞</span>
+
+          <div class="ylm-slate-row highlight">
+            <div class="ylm-val" id="valIntegrated">-</div>
+            <div class="ylm-lbl">INTEGRATED</div>
+          </div>
+
+          <div class="ylm-slate-row">
+            <div class="ylm-val" id="valLRA">0.0 <span class="ylm-unit">LU</span></div>
+            <div class="ylm-lbl">LOUDNESS RANGE</div>
+          </div>
+
+          <div class="ylm-slate-row">
+            <div class="ylm-val" id="valPSR">-</div>
+            <div class="ylm-lbl">DYNAMICS (PSR)</div>
+          </div>
+
+          <div class="ylm-slate-row">
+            <div class="ylm-val" id="valPLR">-</div>
+            <div class="ylm-lbl">AVG. DYNAMICS (PLR)</div>
+          </div>
+        </div>
+
+        <!-- 3 Rounded Pill Readouts -->
+        <div class="ylm-pills-wrap">
+          <div class="ylm-pill-group">
+            <div class="ylm-pill-box" id="valMomentaryMax">-</div>
+            <div class="ylm-pill-lbl">MOMENTARY MAX</div>
+          </div>
+
+          <div class="ylm-pill-group">
+            <div class="ylm-pill-box" id="valShortTermMax">-</div>
+            <div class="ylm-pill-lbl">SHORT TERM MAX</div>
+          </div>
+
+          <div class="ylm-pill-group">
+            <div class="ylm-pill-box" id="valTruePeakMax">-</div>
+            <div class="ylm-pill-lbl">TRUE PEAK MAX</div>
+          </div>
+        </div>
+
+        <!-- Bottom AUTO & Red X Reset Row -->
+        <div class="ylm-readout-bottom">
+          <button id="btnAutoScale" class="ylm-auto-pill" title="타겟 대비 게인/상태 확인">AUTO</button>
+          <button id="btnReset" class="ylm-reset-btn" title="모든 측정값 및 그래프 초기화 (단축키: R)">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4">
+              <line x1="18" y1="6" x2="6" y2="18"/>
+              <line x1="6" y1="6" x2="18" y2="18"/>
+            </svg>
+          </button>
+        </div>
+      </section>
+
+      <!-- COLUMN 3 & 4: Histogram Distribution + Time-Series Graph + Minimap -->
+      <section class="ylm-col-graph" id="dropZone">
+        <canvas id="historyCanvas"></canvas>
+
+        <!-- Floating Graph Overlay Buttons (Bottom-Right of Main Plot) -->
+        <div class="ylm-graph-float-btns">
+          <button id="btnFloatAudio" class="ylm-float-circle active-red" title="오디오 모니터링 / 기준 톤 토글">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+              <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/>
+              <path d="M15.54 8.46a5 5 0 0 1 0 7.07"/>
+            </svg>
+          </button>
+          <button id="btnFloatPeaks" class="ylm-float-circle" title="트루 피크 경고 마커 표시 전환">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+              <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
+            </svg>
+          </button>
+          <button id="btnFloatTarget" class="ylm-float-circle" title="타겟 기준선 표시 전환">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+              <line x1="4" y1="9" x2="20" y2="9"/>
+              <line x1="4" y1="15" x2="20" y2="15"/>
+            </svg>
+          </button>
+        </div>
+
+        <!-- Drag & Drop Overlay -->
+        <div id="dropOverlay" class="ylm-drop-overlay hidden">
+          <div class="ylm-drop-box">
+            <h3>DROP AUDIO FILE HERE</h3>
+            <p>WAV · MP3 · FLAC · M4A · OGG — Instant Full-Track Loudness Graph</p>
           </div>
         </div>
       </section>
     </main>
+
+    <!-- ================= BOTTOM LIGHT FOOTER BAR ================= -->
+    <footer class="ylm-bottombar">
+      <div class="ylm-bot-left">
+        <!-- Input Device Selector Pill -->
+        <div class="ylm-footer-pill">
+          <select id="deviceSelect" title="오디오 입력 채널 및 장치 선택">
+            <option value="">(A) STEREO ITU</option>
+          </select>
+          <span class="pill-arrow">❯</span>
+        </div>
+
+        <!-- Preset Selector Pill -->
+        <div class="ylm-footer-pill">
+          <select id="presetSelect" title="스트리밍 및 방송 타겟 프리셋">
+            <option value="ebu">DEFAULT (EBU R128 -23)</option>
+            <option value="spotify" selected>SPOTIFY (-14 LUFS)</option>
+            <option value="youtube">YOUTUBE (-14 LUFS)</option>
+            <option value="apple">APPLE MUSIC (-16 LUFS)</option>
+            <option value="tidal">TIDAL / AMAZON (-14 LUFS)</option>
+            <option value="atsc">ATSC A/85 TV (-24 LKFS)</option>
+            <option value="netflix">NETFLIX (-27 LKFS)</option>
+            <option value="podcast">PODCAST (-16 LUFS)</option>
+            <option value="club">CLUB MASTER (-8 LUFS)</option>
+          </select>
+          <span class="pill-arrow">❯</span>
+        </div>
+
+        <span class="ylm-info-badge" id="verdictText" title="현재 타겟 프리셋 진단">ⓘ</span>
+      </div>
+
+      <div class="ylm-bot-center">
+        <div class="ylm-ab-switch">
+          <span class="ab-active">A</span>
+          <span class="ab-sep">|</span>
+          <span>B</span>
+        </div>
+
+        <!-- Time Window Outlined Pill -->
+        <div class="ylm-window-pill">
+          <select id="windowSelector" title="그래프 시간 범위 선택">
+            <option value="10">10 sec</option>
+            <option value="30" selected>30 sec</option>
+            <option value="60">1 min</option>
+            <option value="300">5 min</option>
+            <option value="0">Full File</option>
+          </select>
+          <span class="pill-zig">ⸯ</span>
+        </div>
+
+        <!-- Continuous / Paused Mode Pill -->
+        <button id="btnPauseGraph" class="ylm-footer-pill-btn">
+          <span id="lblGraphMode">CONTINUOUS</span>
+          <span class="pill-arrow">❯</span>
+        </button>
+      </div>
+
+      <div class="ylm-bot-right">
+        <div class="ylm-layer-toggles">
+          <button class="ylm-circle-toggle active" data-layer="S" title="Short-Term 곡선 표시">S</button>
+          <button class="ylm-circle-toggle" data-layer="M" title="Momentary 곡선 표시">M</button>
+          <button class="ylm-circle-toggle active" data-layer="T" title="True Peak 마커 표시">T</button>
+          <button class="ylm-circle-toggle" data-layer="D" title="Dynamics 표시">D</button>
+          <button class="ylm-circle-toggle active" data-layer="G" title="Grid / Target 기준선 표시">G</button>
+        </div>
+
+        <span class="ylm-file-status" id="fileMetaInfo" title="현재 오디오 소스 상태">READY</span>
+      </div>
+    </footer>
   </div>
 
   <script src="./dsp.js"></script>

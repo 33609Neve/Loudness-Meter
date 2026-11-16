@@ -391,6 +391,11 @@ class LoudnessMeterEngine {
       isFinite(maxTpDB) && isFinite(this.integratedLUFS)
         ? maxTpDB - this.integratedLUFS
         : -Infinity;
+    const currentPeakDB = Math.max(tpLeftDB, tpRightDB);
+    const psr =
+      isFinite(currentPeakDB) && isFinite(this.shortTermLUFS)
+        ? currentPeakDB - this.shortTermLUFS
+        : -Infinity;
 
     return {
       momentary: this.momentaryLUFS,
@@ -404,6 +409,7 @@ class LoudnessMeterEngine {
       maxTruePeak: maxTpDB,
       maxSamplePeak: maxSpDB,
       plr,
+      psr,
       clipCount: this.clipCount,
       durationSec: this.totalSamplesProcessed / this.sampleRate,
     };

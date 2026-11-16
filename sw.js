@@ -1,4 +1,4 @@
-const CACHE_NAME = 'ulm-pro-v2';
+const CACHE_NAME = 'ulm-pro-v3';
 const ASSETS = [
   './',
   './index.html',
