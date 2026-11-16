@@ -570,17 +570,17 @@ function getActiveSnapshot() {
 function updateReadouts(snap) {
   const preset = STREAMING_PRESETS[currentPresetKey];
 
-  lblTargetLUFS.textContent = `${preset.targetLUFS.toFixed(1)} LUFS`;
-  lblCeilingTP.textContent = `${preset.maxTruePeak.toFixed(1)} dBTP`;
-  graphTargetLabel.textContent = preset.targetLUFS.toFixed(0);
-  verdictPresetName.textContent = preset.name;
+  if (lblTargetLUFS) lblTargetLUFS.textContent = preset.targetLUFS.toFixed(1);
+  if (lblCeilingTP) lblCeilingTP.textContent = `${preset.maxTruePeak.toFixed(1)} dBTP`;
+  if (graphTargetLabel) graphTargetLabel.textContent = preset.targetLUFS.toFixed(0);
+  if (verdictPresetName) verdictPresetName.textContent = preset.name;
 
   // Integrated LUFS + Target Delta
   valIntegrated.textContent = formatLUFS(snap.integrated, 1);
   if (isFinite(snap.integrated) && snap.integrated > -90) {
     const delta = snap.integrated - preset.targetLUFS;
     const sign = delta > 0 ? '+' : '';
-    valTargetDelta.textContent = `Δ ${sign}${delta.toFixed(1)} LU`;
+    valTargetDelta.textContent = `목표 ${preset.targetLUFS.toFixed(0)} | ${sign}${delta.toFixed(1)} LU`;
     valTargetDelta.className = 'delta-pill';
     if (Math.abs(delta) <= preset.tolerance) {
       valTargetDelta.classList.add('good');
@@ -590,20 +590,20 @@ function updateReadouts(snap) {
       valTargetDelta.classList.add('warn');
     }
   } else {
-    valTargetDelta.textContent = 'Δ -- LU';
+    valTargetDelta.textContent = `목표 ${preset.targetLUFS.toFixed(1)} LUFS`;
     valTargetDelta.className = 'delta-pill';
   }
 
   // Short-Term & Momentary
   valShortTerm.textContent = formatLUFS(snap.shortTerm, 1);
-  valShortTermMax.textContent = `${formatLUFS(snap.shortTermMax, 1)} LUFS`;
+  valShortTermMax.textContent = formatLUFS(snap.shortTermMax, 1);
   valMomentary.textContent = formatLUFS(snap.momentary, 1);
-  valMomentaryMax.textContent = `${formatLUFS(snap.momentaryMax, 1)} LUFS`;
+  valMomentaryMax.textContent = formatLUFS(snap.momentaryMax, 1);
 
   // LRA & Dynamics Tag
   valLRA.textContent = snap.lra.toFixed(1);
   if (!isFinite(snap.integrated) || snap.integrated < -70) {
-    valDynamicsTag.textContent = '--';
+    valDynamicsTag.textContent = '다이내믹스 대기';
   } else if (snap.lra < 4) {
     valDynamicsTag.textContent = '압축됨 (Tight)';
   } else if (snap.lra <= 10) {
@@ -614,17 +614,17 @@ function updateReadouts(snap) {
 
   // PLR & Sample Peak
   valPLR.textContent = isFinite(snap.plr) && snap.plr > 0 ? snap.plr.toFixed(1) : '--';
-  valSamplePeak.textContent = `${formatDB(snap.maxSamplePeak, 1)} dBFS`;
+  valSamplePeak.textContent = `${formatDB(snap.maxSamplePeak, 1)} dB`;
 
   // True Peak Max & Clip Indicator
   valTruePeakMax.textContent = formatDB(snap.maxTruePeak, 1);
   valTPL.textContent = formatDB(snap.truePeakL, 1);
   valTPR.textContent = formatDB(snap.truePeakR, 1);
-  valClipCount.textContent = `${snap.clipCount} clips (>0 dBTP)`;
+  valClipCount.textContent = `${snap.clipCount} clips`;
 
   clipBadge.className = 'clip-indicator';
   if (snap.maxTruePeak > 0.0) {
-    clipBadge.textContent = 'CLIP (>0 dBTP)';
+    clipBadge.textContent = 'CLIP (>0 dB)';
     clipBadge.classList.add('clip');
   } else if (snap.maxTruePeak > preset.maxTruePeak) {
     clipBadge.textContent = `OVER ${preset.maxTruePeak.toFixed(1)}`;
@@ -638,15 +638,15 @@ function updateReadouts(snap) {
     const diff = preset.targetLUFS - snap.integrated;
     const tpWarning =
       snap.maxTruePeak > preset.maxTruePeak
-        ? ` ⚠️ 트루 피크가 권장치(${preset.maxTruePeak.toFixed(1)} dBTP)를 ${(snap.maxTruePeak - preset.maxTruePeak).toFixed(1)} dB 초과하여 손실 인코딩 시 클리핑이 발생할 수 있습니다.`
-        : ` ✅ 트루 피크 여유 공간이 안전합니다 (${snap.maxTruePeak.toFixed(1)} dBTP).`;
+        ? `<br/>⚠️ 트루 피크가 권장치(${preset.maxTruePeak.toFixed(1)} dBTP)를 초과했습니다.`
+        : `<br/>✅ 트루 피크 여유 공간 안전 (${snap.maxTruePeak.toFixed(1)} dBTP)`;
 
     if (diff < -0.2) {
-      verdictText.innerHTML = `<strong>${preset.name}</strong>에서 재생 시 볼륨이 약 <strong>${diff.toFixed(1)} dB</strong> 감쇠(Turned Down)됩니다.${tpWarning}`;
+      verdictText.innerHTML = `<strong>${preset.name}</strong>에서 볼륨이 <strong>${diff.toFixed(1)} dB</strong> 낮춰집니다.${tpWarning}`;
     } else if (diff > 0.5) {
-      verdictText.innerHTML = `타겟보다 <strong>${diff.toFixed(1)} LU</strong> 낮습니다. 리미터 여유 범위 내에서 음량을 높일 수 있습니다.${tpWarning}`;
+      verdictText.innerHTML = `목표보다 <strong>${diff.toFixed(1)} LU</strong> 낮습니다 (볼륨 확보 가능).${tpWarning}`;
     } else {
-      verdictText.innerHTML = `🎯 <strong>${preset.name}</strong> 타겟(${preset.targetLUFS} LUFS)에 정확히 부합합니다!${tpWarning}`;
+      verdictText.innerHTML = `🎯 <strong>${preset.name}</strong> 기준(${preset.targetLUFS} LUFS)에 정확히 부합합니다!${tpWarning}`;
     }
   }
 
@@ -706,21 +706,21 @@ function renderHistoryGraph(snap) {
 
   // Horizontal Grid Lines
   const gridSteps = [0, -6, -9, -14, -16, -18, -23, -27, -36, -48];
-  ctx.font = '10px "SF Mono", Menlo, monospace';
+  ctx.font = '600 11px "JetBrains Mono", "SF Mono", Menlo, monospace';
   ctx.textAlign = 'right';
   ctx.textBaseline = 'middle';
 
   for (const db of gridSteps) {
     const y = lufsToY(db);
-    ctx.strokeStyle = db === 0 ? 'rgba(239, 68, 68, 0.3)' : 'rgba(255, 255, 255, 0.055)';
+    ctx.strokeStyle = db === 0 ? 'rgba(239, 68, 68, 0.35)' : 'rgba(255, 255, 255, 0.065)';
     ctx.lineWidth = 1;
     ctx.beginPath();
     ctx.moveTo(padLeft, y);
     ctx.lineTo(padLeft + plotW, y);
     ctx.stroke();
 
-    ctx.fillStyle = '#637286';
-    ctx.fillText(`${db}`, padLeft - 6, y);
+    ctx.fillStyle = '#9aa7b8';
+    ctx.fillText(`${db}`, padLeft - 7, y);
   }
 
   // Target Preset Line & Tolerance Band
@@ -842,7 +842,7 @@ function renderHistoryGraph(snap) {
       }
 
       // 6. Time Axis Labels
-      ctx.fillStyle = '#637286';
+      ctx.fillStyle = '#9aa7b8';
       ctx.textAlign = 'center';
       ctx.textBaseline = 'top';
       const numTimeTicks = 6;
@@ -916,10 +916,10 @@ function renderHistoryGraph(snap) {
     }
   } else {
     // Empty state watermark inside graph
-    ctx.fillStyle = 'rgba(154, 167, 184, 0.35)';
+    ctx.fillStyle = 'rgba(180, 192, 211, 0.55)';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.font = '13px -apple-system, BlinkMacSystemFont, sans-serif';
+    ctx.font = '600 14.5px "Pretendard", -apple-system, BlinkMacSystemFont, sans-serif';
     ctx.fillText(
       '오디오 파일을 여기에 드래그 앤 드롭하거나 상단에서 입력 소스를 시작하세요',
       padLeft + plotW / 2,
@@ -951,8 +951,8 @@ function renderBarMeters(snap) {
   const H = rect.height;
   ctx.clearRect(0, 0, W, H);
 
-  const topPad = 8;
-  const botPad = 6;
+  const topPad = 10;
+  const botPad = 8;
   const barH = Math.max(10, H - topPad - botPad);
 
   const minDB = -60;
@@ -963,47 +963,49 @@ function renderBarMeters(snap) {
     return topPad + barH * (1 - norm);
   };
 
-  // Layout columns: [LUFS Bar] [Scale Labels] [TP L] [TP R]
-  const lufsX = 6;
-  const lufsW = 24;
-  const tpLX = W - 36;
-  const tpRX = W - 18;
-  const tpW = 13;
+  // Layout columns: [M Bar] [S Bar] [Scale Labels] [TP L] [TP R]
+  const mX = 6;
+  const mW = 20;
+  const sX = 30;
+  const sW = 16;
+  const tpLX = W - 44;
+  const tpRX = W - 22;
+  const tpW = 17;
 
-  // Draw backgrounds
-  ctx.fillStyle = '#0b0e14';
-  ctx.fillRect(lufsX, topPad, lufsW, barH);
+  // Draw meter tracks
+  ctx.fillStyle = '#090c12';
+  ctx.fillRect(mX, topPad, mW, barH);
+  ctx.fillRect(sX, topPad, sW, barH);
   ctx.fillRect(tpLX, topPad, tpW, barH);
   ctx.fillRect(tpRX, topPad, tpW, barH);
 
-  // 1. LUFS Momentary Bar
+  // 1. Momentary Bar (M)
   const preset = STREAMING_PRESETS[currentPresetKey];
   const momY = dbToY(snap.momentary);
-  const fillH = Math.max(0, topPad + barH - momY);
+  const momFillH = Math.max(0, topPad + barH - momY);
 
   const lufsGrad = ctx.createLinearGradient(0, topPad + barH, 0, topPad);
   lufsGrad.addColorStop(0, '#0284c7');
-  lufsGrad.addColorStop(0.65, '#00d4ff');
+  lufsGrad.addColorStop(0.65, '#00e1ff');
   lufsGrad.addColorStop(0.82, '#10b981');
   lufsGrad.addColorStop(0.92, '#f59e0b');
   lufsGrad.addColorStop(1, '#ef4444');
 
   ctx.fillStyle = lufsGrad;
-  ctx.fillRect(lufsX, momY, lufsW, fillH);
+  ctx.fillRect(mX, momY, mW, momFillH);
 
-  // Short-Term tick marker on LUFS bar
-  if (isFinite(snap.shortTerm) && snap.shortTerm > minDB) {
-    const stY = dbToY(snap.shortTerm);
-    ctx.fillStyle = '#ffffff';
-    ctx.fillRect(lufsX - 2, stY - 1, lufsW + 4, 2.5);
-  }
+  // 2. Short-Term Bar (S)
+  const stY = dbToY(snap.shortTerm);
+  const stFillH = Math.max(0, topPad + barH - stY);
+  ctx.fillStyle = 'rgba(0, 225, 255, 0.72)';
+  ctx.fillRect(sX, stY, sW, stFillH);
 
-  // Target LUFS tick on LUFS bar
+  // Target LUFS tick across M + S bars
   const targetY = dbToY(preset.targetLUFS);
   ctx.fillStyle = '#10b981';
-  ctx.fillRect(lufsX - 3, targetY - 1, lufsW + 6, 2);
+  ctx.fillRect(mX - 2, targetY - 1.5, sX + sW - mX + 4, 3);
 
-  // 2. True Peak L & R Bars
+  // 3. True Peak L & R Bars
   const drawTPBar = (x, dbVal, maxChVal) => {
     const y = dbToY(dbVal);
     const h = Math.max(0, topPad + barH - y);
@@ -1011,20 +1013,20 @@ function renderBarMeters(snap) {
     ctx.fillRect(x, y, tpW, h);
 
     // Top Clip LED
-    ctx.fillStyle = maxChVal > 0 ? '#ef4444' : 'rgba(255,255,255,0.08)';
-    ctx.fillRect(x, 0, tpW, 5);
+    ctx.fillStyle = maxChVal > 0 ? '#ef4444' : 'rgba(255,255,255,0.1)';
+    ctx.fillRect(x, 0, tpW, 6);
   };
 
   drawTPBar(tpLX, snap.truePeakL, snap.maxTruePeak);
   drawTPBar(tpRX, snap.truePeakR, snap.maxTruePeak);
 
-  // 3. Scale Markings in center
+  // 4. Scale Markings in center
   const scaleMarks = [0, -6, -9, -14, -18, -23, -30, -40, -50];
-  ctx.fillStyle = '#637286';
-  ctx.font = '9px "SF Mono", Menlo, monospace';
+  ctx.fillStyle = '#9aa7b8';
+  ctx.font = '600 10.5px "JetBrains Mono", "SF Mono", monospace';
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  const centerScaleX = (lufsX + lufsW + tpLX) / 2;
+  const centerScaleX = (sX + sW + tpLX) / 2;
 
   for (const m of scaleMarks) {
     const y = dbToY(m);
