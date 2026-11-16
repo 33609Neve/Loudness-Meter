@@ -15,6 +15,7 @@ let currentMode = 'standby'; // 'standby' | 'live' | 'system' | 'file' | 'tone'
 let currentPresetKey = 'spotify';
 let timeWindowSec = 30;
 let graphPaused = false;
+let barMeterMode = 'M'; // 'M' (Momentary bar) | 'S' (Short-Term bar)
 
 // Pro Audition States
 let normPreviewEnabled = false;
@@ -25,7 +26,7 @@ const layers = {
   S: true,  // Short-Term curve
   M: false, // Momentary curve
   T: true,  // True Peak markers
-  D: true,  // Dynamics / A-B Ghost Comparison curve
+  D: false, // Dynamics / A-B Ghost Comparison curve
   G: true,  // Grid & Target line
 };
 
@@ -68,8 +69,11 @@ let monoSumNode = null;
 let fileIsPlaying = false;
 let filePlayStartCtxTime = 0;
 
-// Graph hover state
+// Graph hover & drag-scrub state
 let hoverPoint = null;
+let isDraggingSeek = false;
+let dragSeekZone = null; // 'main' | 'minimap'
+let lastGraphView = { startTime: 0, endTime: 30, totalDuration: 30, plotLeft: 152, plotRight: 800, miniLeft: 116, miniW: 684 };
 
 // ================= 60FPS STUDIO METER BALLISTICS & DISPLAY SMOOTHING =================
 let lastTickTime = performance.now();
@@ -97,7 +101,6 @@ const ballistics = {
 function updateBallistics(snap, dt) {
   const clampedDt = Math.min(0.1, Math.max(0.001, dt));
 
-  // Helper: damped slew-rate-limited exponential filter
   const smoothValue = (current, target, tauUp, tauDown, maxRatePerSec) => {
     if (!isFinite(target)) return current;
     if (!isFinite(current)) return target;
@@ -111,47 +114,47 @@ function updateBallistics(snap, dt) {
     return current + delta;
   };
 
-  // 1. Momentary Bar Gauge: damped attack (220ms), smooth studio release (500ms), max 15 LU/sec slew
+  // 1. Momentary Bar Gauge: damped attack (200ms), smooth studio release (480ms), max 15 LU/sec slew
   const targetMom = isFinite(snap.momentary) && snap.momentary > -58 ? snap.momentary : -58;
-  ballistics.momentary = smoothValue(ballistics.momentary, targetMom, 0.22, 0.50, 15.0);
+  ballistics.momentary = smoothValue(ballistics.momentary, targetMom, 0.20, 0.48, 15.0);
 
-  // 2. Short-Term: calm 400ms time constant, max 8 LU/sec slew
+  // 2. Short-Term: calm 380ms time constant, max 8 LU/sec slew
   if (isFinite(snap.shortTerm) && snap.shortTerm > -80) {
     if (ballistics.shortTerm <= -57.5) {
       ballistics.shortTerm = snap.shortTerm;
     } else {
-      ballistics.shortTerm = smoothValue(ballistics.shortTerm, snap.shortTerm, 0.38, 0.45, 8.0);
+      ballistics.shortTerm = smoothValue(ballistics.shortTerm, snap.shortTerm, 0.36, 0.45, 8.0);
     }
   } else {
     ballistics.shortTerm = smoothValue(ballistics.shortTerm, -58, 0.45, 0.45, 10.0);
   }
 
-  // 3. Integrated LUFS: calm 500ms time constant, max 5 LU/sec slew
+  // 3. Integrated LUFS: calm 450ms time constant
   if (isFinite(snap.integrated) && snap.integrated > -80) {
-    ballistics.integrated = smoothValue(ballistics.integrated, snap.integrated, 0.50, 0.50, 5.0);
+    ballistics.integrated = smoothValue(ballistics.integrated, snap.integrated, 0.45, 0.45, 6.0);
   } else {
     ballistics.integrated = -Infinity;
   }
 
-  // 4. LRA: calm 600ms time constant, max 4 LU/sec slew
-  ballistics.lra = smoothValue(ballistics.lra, snap.lra || 0, 0.60, 0.60, 4.0);
+  // 4. LRA: calm 550ms time constant
+  ballistics.lra = smoothValue(ballistics.lra, snap.lra || 0, 0.55, 0.55, 4.0);
 
-  // 5. PSR & PLR: calm 550ms time constant, max 5 LU/sec slew so LU numbers never jump
+  // 5. PSR & PLR: calm 500ms time constant so LU numbers never jump
   if (isFinite(snap.psr) && snap.psr > 0) {
-    ballistics.psr = smoothValue(ballistics.psr, snap.psr, 0.55, 0.65, 5.0);
+    ballistics.psr = smoothValue(ballistics.psr, snap.psr, 0.50, 0.60, 5.0);
   } else {
     ballistics.psr = -Infinity;
   }
 
   if (isFinite(snap.plr) && snap.plr > 0) {
-    ballistics.plr = smoothValue(ballistics.plr, snap.plr, 0.55, 0.65, 5.0);
+    ballistics.plr = smoothValue(ballistics.plr, snap.plr, 0.50, 0.60, 5.0);
   } else {
     ballistics.plr = -Infinity;
   }
 
-  // 6. Phase Correlation: smooth 350ms time constant
-  const targetCorr = isFinite(snap.correlation) ? snap.correlation : 1.0;
-  ballistics.correlation = smoothValue(ballistics.correlation, targetCorr, 0.35, 0.35, 1.5);
+  // 6. Phase Correlation: responsive 140ms time constant so phase graph moves livelily
+  const rawCorr = monoCheckEnabled ? 1.0 : isFinite(snap.correlation) ? snap.correlation : 1.0;
+  ballistics.correlation = smoothValue(ballistics.correlation, rawCorr, 0.14, 0.16, 4.5);
 }
 
 // ================= DOM ELEMENTS =================
@@ -171,6 +174,7 @@ const btnReset = document.getElementById('btnReset');
 const btnMiniMode = document.getElementById('btnMiniMode');
 const btnPiP = document.getElementById('btnPiP');
 const btnAutoScale = document.getElementById('btnAutoScale');
+const btnIntLra = document.getElementById('btnIntLra');
 
 // Export Menu DOM
 const btnExport = document.getElementById('btnExport');
@@ -192,6 +196,8 @@ const valTruePeakMax = document.getElementById('valTruePeakMax');
 const verdictText = document.getElementById('verdictText');
 
 const valPhaseCorr = document.getElementById('valPhaseCorr');
+const phaseFill = document.getElementById('phaseFill');
+const phaseMinTick = document.getElementById('phaseMinTick');
 const phaseThumb = document.getElementById('phaseThumb');
 
 // A/B & Graph DOM
@@ -235,7 +241,6 @@ function computeNormalizationGainDB(snap) {
   const preset = STREAMING_PRESETS[currentPresetKey];
   if (!snap || !isFinite(snap.integrated) || snap.integrated < -70) return 0;
   let gainDB = preset.targetLUFS - snap.integrated;
-  // If boosting a quiet track, limit boost by True Peak ceiling headroom
   if (gainDB > 0 && isFinite(snap.maxTruePeak)) {
     const headroomDB = preset.maxTruePeak - snap.maxTruePeak;
     gainDB = Math.min(gainDB, Math.max(0, headroomDB));
@@ -375,6 +380,7 @@ function attachRealtimeProcessor(inputNode, passthroughToSpeakers = false) {
           truePeakL: snap.truePeakL,
           truePeakR: snap.truePeakR,
           psr: snap.psr,
+          correlation: snap.correlation,
         });
         if (liveHistory.length > 9000) {
           liveHistory.shift();
@@ -449,6 +455,7 @@ async function startLiveDeviceInput() {
     await populateAudioDevices();
 
     engine.setConfig(ctx.sampleRate, 2);
+    ballistics.reset();
     liveHistory = [];
     liveHistogram.fill(0);
 
@@ -505,6 +512,7 @@ async function startSystemAudioCapture() {
     };
 
     engine.setConfig(ctx.sampleRate, 2);
+    ballistics.reset();
     liveHistory = [];
     liveHistogram.fill(0);
 
@@ -532,6 +540,7 @@ function toggleReferenceTone() {
   stopAllActiveAudio();
   const ctx = ensureAudioContext();
   engine.setConfig(ctx.sampleRate, 2);
+  ballistics.reset();
   liveHistory = [];
   liveHistogram.fill(0);
 
@@ -597,6 +606,7 @@ async function handleFileLoad(file) {
 
     timeWindowSec = 0;
     windowSelector.value = '0';
+    lastReadoutUpdateTime = 0;
 
     updateABButtonsUI();
     fileMetaInfo.textContent = `[${activeSlotKey}] ${file.name}`;
@@ -613,6 +623,7 @@ function switchABSlot(targetKey) {
     pauseFilePlayback();
   }
   activeSlotKey = targetKey;
+  lastReadoutUpdateTime = 0;
   const slot = getSlot();
   if (slot.analysis) {
     currentMode = 'file';
@@ -682,7 +693,6 @@ function startFilePlayback(offsetSec) {
   fileSourceNode = ctx.createBufferSource();
   fileSourceNode.buffer = slot.audioBuffer;
 
-  // Normalization Preview GainNode
   playbackGainNode = ctx.createGain();
   const gainDB = normPreviewEnabled ? computeNormalizationGainDB(slot.analysis?.summary) : 0;
   playbackGainNode.gain.value = Math.pow(10, gainDB / 20);
@@ -690,7 +700,6 @@ function startFilePlayback(offsetSec) {
   fileSourceNode.connect(playbackGainNode);
 
   if (monoCheckEnabled && slot.audioBuffer.numberOfChannels >= 2) {
-    // True Mono Fold-Down (L+R)*0.5 to both ears
     const splitter = ctx.createChannelSplitter(2);
     const merger = ctx.createChannelMerger(2);
     const gainL = ctx.createGain();
@@ -750,6 +759,7 @@ function pauseFilePlayback() {
 function stopFilePlayback() {
   pauseFilePlayback();
   getSlot().pauseOffsetSec = 0;
+  lastReadoutUpdateTime = 0;
 }
 
 function getFilePlayheadSec() {
@@ -780,9 +790,10 @@ function getActiveSnapshot() {
   if (currentMode === 'file' && slot.analysis) {
     const summary = slot.analysis.summary;
     const tl = slot.analysis.timeline;
-    if (fileIsPlaying && tl && tl.length > 0) {
-      const playSec = getFilePlayheadSec();
-      // Interpolate directly from the exact pre-analyzed timeline (zero audio-thread jitter!)
+    const playSec = getFilePlayheadSec();
+
+    // Interpolate from the pre-analyzed timeline whenever playing OR seeked to a position
+    if ((fileIsPlaying || playSec > 0.01) && tl && tl.length > 0) {
       const rawIdx = (playSec / Math.max(0.01, slot.analysis.durationSec)) * (tl.length - 1);
       const idx0 = Math.max(0, Math.min(tl.length - 1, Math.floor(rawIdx)));
       const idx1 = Math.min(tl.length - 1, idx0 + 1);
@@ -803,6 +814,7 @@ function getActiveSnapshot() {
         truePeakL: interp(p0.truePeakL, p1.truePeakL),
         truePeakR: interp(p0.truePeakR, p1.truePeakR),
         psr: interp(p0.psr, p1.psr),
+        correlation: monoCheckEnabled ? 1.0 : interp(p0.correlation ?? 1, p1.correlation ?? 1),
       };
     }
     return summary;
@@ -818,18 +830,35 @@ function formatYouleanValue(val, unit) {
 function updateReadouts(snap, now = performance.now()) {
   const preset = STREAMING_PRESETS[currentPresetKey];
 
-  // Smooth 60fps Phase Correlation Thumb
-  const corr = isFinite(ballistics.correlation) ? ballistics.correlation : 1.0;
+  // 1. 60fps Stereo Phase Correlation Bar, Thumb & Min-Hold Tick
+  const corr = Math.max(-1, Math.min(1, isFinite(ballistics.correlation) ? ballistics.correlation : 1.0));
   const pct = ((corr + 1) / 2) * 100;
-  if (phaseThumb) phaseThumb.style.left = `${Math.max(3, Math.min(97, pct))}%`;
+  if (phaseThumb) {
+    phaseThumb.style.left = `${Math.max(4, Math.min(96, pct))}%`;
+  }
+  if (phaseFill) {
+    if (corr >= 0) {
+      phaseFill.style.left = '50%';
+      phaseFill.style.width = `${corr * 50}%`;
+      phaseFill.style.background = corr > 0.35 ? '#7ac174' : '#5887da';
+    } else {
+      const w = Math.abs(corr) * 50;
+      phaseFill.style.left = `${50 - w}%`;
+      phaseFill.style.width = `${w}%`;
+      phaseFill.style.background = corr < -0.2 ? '#d95852' : '#d8a648';
+    }
+  }
+  if (phaseMinTick) {
+    const minC = Math.max(-1, Math.min(1, isFinite(snap.minCorrelation) ? snap.minCorrelation : 1.0));
+    phaseMinTick.style.left = `${Math.max(2, Math.min(98, ((minC + 1) / 2) * 100))}%`;
+  }
 
-  // Throttle numeric text readouts to ~5.5 Hz (every 180ms) so digits are calm & readable
+  // 2. Throttle numeric text readouts to ~5.5 Hz (every 180ms) so digits are calm & readable
   if (now - lastReadoutUpdateTime < 180) {
     return;
   }
   lastReadoutUpdateTime = now;
 
-  // 5-Row Slate Stack (using smoothed ballistic values)
   const dispST = ballistics.shortTerm > -57.2 ? ballistics.shortTerm : snap.shortTerm;
   const dispInt = isFinite(ballistics.integrated) ? ballistics.integrated : snap.integrated;
   const dispLRA = ballistics.lra;
@@ -856,7 +885,7 @@ function updateReadouts(snap, now = performance.now()) {
   if (valPhaseCorr) {
     const sign = corr >= 0 ? '+' : '';
     valPhaseCorr.textContent = monoCheckEnabled
-      ? 'MONO SUM'
+      ? 'MONO +1.00'
       : `PHASE ${sign}${corr.toFixed(2)}`;
     valPhaseCorr.style.color = corr < -0.15 ? '#ff6b6b' : corr < 0.2 ? '#f6ad55' : '#b8c2d1';
   }
@@ -884,8 +913,8 @@ function updateReadouts(snap, now = performance.now()) {
   }
 }
 
-// ================= COLUMN 1: YOULEAN LEFT BAR METER RENDERER =================
-function renderBarMeters(snap) {
+// ================= COLUMN 1: LEFT BAR METER RENDERER =================
+function renderBarMeters() {
   const dpr = window.devicePixelRatio || 1;
   const rect = barMeterCanvas.getBoundingClientRect();
   if (rect.width < 10 || rect.height < 10) return;
@@ -956,26 +985,27 @@ function renderBarMeters(snap) {
     ctx.stroke();
   }
 
-  // Momentary Bar Fill (60fps Ballistic-Smoothed: Blue below target, Red above target)
-  const momVal = isFinite(ballistics.momentary) ? ballistics.momentary : minLUFS;
-  if (momVal > minLUFS + 0.1) {
-    const momY = lufsToY(momVal);
+  // Bar Fill (Momentary 'M' or Short-Term 'S' mode)
+  const activeBarVal = barMeterMode === 'S' ? ballistics.shortTerm : ballistics.momentary;
+  const barVal = isFinite(activeBarVal) ? activeBarVal : minLUFS;
+  if (barVal > minLUFS + 0.1) {
+    const barY = lufsToY(barVal);
     const targetY = lufsToY(preset.targetLUFS);
     const bottomY = topPad + barH;
 
-    const blueTopY = Math.max(momY, targetY);
+    const blueTopY = Math.max(barY, targetY);
     if (bottomY > blueTopY) {
       ctx.fillStyle = '#5887da';
       ctx.fillRect(barX, blueTopY, barW, bottomY - blueTopY);
     }
 
-    if (momY < targetY) {
+    if (barY < targetY) {
       ctx.fillStyle = '#d95852';
-      ctx.fillRect(barX, momY, barW, targetY - momY);
+      ctx.fillRect(barX, barY, barW, targetY - barY);
     }
   }
 
-  // LRA Bracket [   ] (Smoothed)
+  // LRA Bracket [   ]
   const centerRef =
     isFinite(ballistics.integrated) && ballistics.integrated > -54 ? ballistics.integrated : -31;
   const halfLRA = Math.max(2, (ballistics.lra || 4) / 2);
@@ -998,8 +1028,8 @@ function renderBarMeters(snap) {
   ctx.lineTo(barX + barW - 3, brkBotY);
   ctx.stroke();
 
-  // White Triangle Pointer (◀) (Smoothed)
-  const ptrVal = momVal > minLUFS + 0.2 ? momVal : minLUFS + 2;
+  // White Triangle Pointer (◀)
+  const ptrVal = barVal > minLUFS + 0.2 ? barVal : minLUFS + 2;
   const ptrY = lufsToY(ptrVal);
   ctx.fillStyle = '#e5e9f0';
   ctx.beginPath();
@@ -1009,7 +1039,7 @@ function renderBarMeters(snap) {
   ctx.closePath();
   ctx.fill();
 
-  // Bottom 'M' and 'LUFS' labels
+  // Bottom 'M' / 'S' and 'LUFS' labels
   const footerLineY = topPad + barH + 10;
   ctx.strokeStyle = '#626875';
   ctx.lineWidth = 1.2;
@@ -1021,7 +1051,7 @@ function renderBarMeters(snap) {
   ctx.fillStyle = '#d8dee9';
   ctx.textAlign = 'center';
   ctx.font = '700 9px "Open Sans", sans-serif';
-  ctx.fillText('M', barCenterX, footerLineY + 9);
+  ctx.fillText(barMeterMode, barCenterX, footerLineY + 9);
 
   ctx.font = '600 14px "Open Sans", sans-serif';
   ctx.fillStyle = '#ffffff';
@@ -1031,7 +1061,7 @@ function renderBarMeters(snap) {
 }
 
 // ================= COLUMN 3 & 4: HISTOGRAM + TIME GRAPH + MINIMAP RENDERER =================
-function renderHistoryGraph(snap) {
+function renderHistoryGraph() {
   const dpr = window.devicePixelRatio || 1;
   const rect = historyCanvas.getBoundingClientRect();
   if (rect.width < 10 || rect.height < 10) return;
@@ -1175,21 +1205,25 @@ function renderHistoryGraph(snap) {
   let endTime = totalDuration;
 
   if (timeWindowSec > 0) {
-    if (isFileMode && fileIsPlaying) {
+    if (isFileMode) {
       const playhead = getFilePlayheadSec();
-      endTime = Math.max(timeWindowSec, playhead);
-      startTime = endTime - timeWindowSec;
-    } else if (!isFileMode) {
+      endTime = Math.min(totalDuration, Math.max(timeWindowSec, playhead + timeWindowSec * 0.15));
+      startTime = Math.max(0, endTime - timeWindowSec);
+    } else {
       endTime = Math.max(timeWindowSec, lastTime);
       startTime = endTime - timeWindowSec;
-    } else {
-      endTime = Math.min(totalDuration, timeWindowSec);
-      startTime = 0;
     }
   }
 
-  const spanSec = Math.max(1, endTime - startTime);
+  const spanSec = Math.max(0.5, endTime - startTime);
   const timeToX = (t) => plotLeft + ((t - startTime) / spanSec) * plotW;
+
+  const miniTop = H - minimapH - 4;
+  const miniLeft = plotLeft - 36;
+  const miniW = plotRight - miniLeft;
+
+  // Save geometry for accurate click/drag seeking
+  lastGraphView = { startTime, endTime, totalDuration, plotLeft, plotRight, miniLeft, miniW, miniTop, topPad, plotH };
 
   // Draw Other Slot (A/B Comparison) Ghost Curve if Layer D is active & other slot has data
   const otherSlot = getOtherSlot();
@@ -1206,9 +1240,9 @@ function renderHistoryGraph(snap) {
         if (i === 0) ctx.moveTo(x, y);
         else ctx.lineTo(x, y);
       }
-      ctx.strokeStyle = 'rgba(216, 166, 72, 0.65)';
+      ctx.strokeStyle = 'rgba(216, 166, 72, 0.75)';
       ctx.setLineDash([4, 4]);
-      ctx.lineWidth = 1.5;
+      ctx.lineWidth = 1.6;
       ctx.stroke();
       ctx.restore();
     }
@@ -1265,8 +1299,25 @@ function renderHistoryGraph(snap) {
           if (i === 0) ctx.moveTo(x, y);
           else ctx.lineTo(x, y);
         }
-        ctx.strokeStyle = 'rgba(255, 255, 255, 0.35)';
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.38)';
         ctx.lineWidth = 1;
+        ctx.stroke();
+      }
+
+      // Dynamics / Stereo Phase Trace if Layer D is active
+      if (layers.D) {
+        ctx.beginPath();
+        for (let i = 0; i < visible.length; i++) {
+          const x = timeToX(visible[i].timeSec);
+          // Map correlation [-1..+1] to bottom strip of plot (-54 to -36 LUFS)
+          const corr = visible[i].correlation ?? 1;
+          const mappedLUFS = -45 + corr * 8;
+          const y = lufsToY(mappedLUFS);
+          if (i === 0) ctx.moveTo(x, y);
+          else ctx.lineTo(x, y);
+        }
+        ctx.strokeStyle = 'rgba(122, 193, 116, 0.75)';
+        ctx.lineWidth = 1.4;
         ctx.stroke();
       }
 
@@ -1289,7 +1340,7 @@ function renderHistoryGraph(snap) {
         if (playSec >= startTime && playSec <= endTime) {
           const px = timeToX(playSec);
           ctx.strokeStyle = '#ffffff';
-          ctx.lineWidth = 1.5;
+          ctx.lineWidth = 1.6;
           ctx.beginPath();
           ctx.moveTo(px, topPad);
           ctx.lineTo(px, topPad + plotH);
@@ -1316,10 +1367,6 @@ function renderHistoryGraph(snap) {
   }
 
   // 5. Bottom Minimap Timeline Strip
-  const miniTop = H - minimapH - 4;
-  const miniLeft = plotLeft - 36;
-  const miniW = plotRight - miniLeft;
-
   ctx.strokeStyle = '#5c6270';
   ctx.lineWidth = 1.2;
   ctx.beginPath();
@@ -1329,21 +1376,24 @@ function renderHistoryGraph(snap) {
   ctx.lineTo(miniLeft + 4, miniTop + minimapH - 2);
   ctx.stroke();
 
+  const innerMiniX = miniLeft + 8;
+  const innerMiniW = Math.max(10, miniW - 16);
+
   if (sourceTimeline.length > 1) {
-    const fullDur = Math.max(1, sourceTimeline[sourceTimeline.length - 1].timeSec);
+    const fullDur = Math.max(0.5, totalDuration);
     ctx.beginPath();
-    ctx.moveTo(miniLeft + 8, miniTop + minimapH - 2);
-    const step = Math.max(1, Math.floor(sourceTimeline.length / 200));
+    ctx.moveTo(innerMiniX, miniTop + minimapH - 2);
+    const step = Math.max(1, Math.floor(sourceTimeline.length / 220));
     for (let i = 0; i < sourceTimeline.length; i += step) {
       const pt = sourceTimeline[i];
-      const mx = miniLeft + 8 + (pt.timeSec / fullDur) * (miniW - 16);
+      const mx = innerMiniX + (pt.timeSec / fullDur) * innerMiniW;
       const val = isFinite(pt.shortTerm) ? pt.shortTerm : pt.momentary;
       const norm = Math.max(0, Math.min(1, (val - minLUFS) / (maxLUFS - minLUFS)));
       const my = miniTop + minimapH - 2 - norm * (minimapH - 6);
       ctx.lineTo(mx, my);
     }
     const lastPt = sourceTimeline[sourceTimeline.length - 1];
-    ctx.lineTo(miniLeft + 8 + (lastPt.timeSec / fullDur) * (miniW - 16), miniTop + minimapH - 2);
+    ctx.lineTo(innerMiniX + (lastPt.timeSec / fullDur) * innerMiniW, miniTop + minimapH - 2);
     ctx.closePath();
     ctx.fillStyle = 'rgba(88, 135, 218, 0.55)';
     ctx.fill();
@@ -1352,13 +1402,30 @@ function renderHistoryGraph(snap) {
     ctx.stroke();
   }
 
-  const vpBoxW = Math.min(185, miniW * 0.34);
-  const vpBoxX = plotRight - vpBoxW;
-  ctx.fillStyle = 'rgba(70, 75, 87, 0.65)';
-  ctx.strokeStyle = '#7c828f';
+  // Dynamic Viewport Box in Minimap
+  const fullDur = Math.max(0.5, totalDuration);
+  const vpStartRatio = Math.max(0, Math.min(1, startTime / fullDur));
+  const vpEndRatio = Math.max(vpStartRatio + 0.04, Math.min(1, endTime / fullDur));
+  const vpBoxX = innerMiniX + vpStartRatio * innerMiniW;
+  const vpBoxW = Math.max(24, (vpEndRatio - vpStartRatio) * innerMiniW);
+
+  ctx.fillStyle = 'rgba(70, 75, 87, 0.55)';
+  ctx.strokeStyle = '#8b92a0';
   ctx.lineWidth = 1.5;
   ctx.fillRect(vpBoxX, miniTop, vpBoxW, minimapH - 2);
   ctx.strokeRect(vpBoxX, miniTop, vpBoxW, minimapH - 2);
+
+  // Minimap Playhead Line
+  if (isFileMode) {
+    const playRatio = Math.max(0, Math.min(1, getFilePlayheadSec() / fullDur));
+    const mpx = innerMiniX + playRatio * innerMiniW;
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(mpx, miniTop);
+    ctx.lineTo(mpx, miniTop + minimapH - 2);
+    ctx.stroke();
+  }
 
   // Hover Crosshair Readout
   if (
@@ -1390,13 +1457,14 @@ function renderHistoryGraph(snap) {
     ctx.stroke();
 
     const tpPeak = Math.max(closest.truePeakL, closest.truePeakR);
-    const labelText = `${formatTime(closest.timeSec)} | S: ${formatLUFS(closest.shortTerm, 1)} LUFS | M: ${formatLUFS(closest.momentary, 1)} LUFS | TP: ${formatDB(tpPeak, 1)} dB`;
+    const ptCorr = closest.correlation ?? 1;
+    const labelText = `${formatTime(closest.timeSec)} | S: ${formatLUFS(closest.shortTerm, 1)} | M: ${formatLUFS(closest.momentary, 1)} | TP: ${formatDB(tpPeak, 1)} dB | Phase: ${(ptCorr >= 0 ? '+' : '') + ptCorr.toFixed(2)}`;
     ctx.font = '700 11.5px "Open Sans", sans-serif';
     const textW = ctx.measureText(labelText).width + 18;
     const bx = Math.min(plotRight - textW - 4, Math.max(plotLeft + 4, cx - textW / 2));
     const by = topPad + 6;
 
-    ctx.fillStyle = 'rgba(28, 31, 38, 0.92)';
+    ctx.fillStyle = 'rgba(28, 31, 38, 0.94)';
     ctx.strokeStyle = '#5887da';
     ctx.lineWidth = 1;
     ctx.fillRect(bx, by, textW, 24);
@@ -1425,7 +1493,6 @@ function exportPNGImage() {
   canvas.height = H;
   const ctx = canvas.getContext('2d');
 
-  // 1. Background & Top Header
   ctx.fillStyle = '#1e2128';
   ctx.fillRect(0, 0, W, H);
 
@@ -1439,17 +1506,14 @@ function exportPNGImage() {
   ctx.textBaseline = 'middle';
   ctx.fillText('Vibe Loudness Meter — Loudness Compliance Report', W / 2, 28);
 
-  // Track & Preset info in header
   ctx.font = '700 14px "Open Sans", sans-serif';
   ctx.textAlign = 'left';
   ctx.fillText(`FILE: ${trackName} (Slot ${activeSlotKey})`, 20, 28);
   ctx.textAlign = 'right';
   ctx.fillText(`TARGET: ${preset.name} (${preset.targetLUFS} LUFS / ${preset.maxTruePeak} dBTP)`, W - 20, 28);
 
-  // 2. Draw Left Bar Meter Canvas Snapshot
   ctx.drawImage(barMeterCanvas, 16, 68, 150, H - 130);
 
-  // 3. Draw Center-Left Readout Cards
   const rx = 182;
   const rw = 240;
   ctx.fillStyle = '#363c48';
@@ -1477,7 +1541,6 @@ function exportPNGImage() {
     ctx.fillText(r.lbl, rx + rw / 2, cy + 20);
   });
 
-  // 3 Pills
   const pills = [
     { val: `${formatLUFS(snap.momentaryMax, 1)} LUFS`, lbl: 'MOMENTARY MAX' },
     { val: `${formatLUFS(snap.shortTermMax, 1)} LUFS`, lbl: 'SHORT TERM MAX' },
@@ -1500,17 +1563,15 @@ function exportPNGImage() {
     ctx.fillText(p.lbl, rx + rw / 2, py + 62);
   });
 
-  // 4. Draw Main History & Histogram Canvas
   ctx.drawImage(historyCanvas, 440, 68, W - 456, H - 130);
 
-  // 5. Bottom Footer Summary
   const gainDB = computeNormalizationGainDB(snap);
   const sign = gainDB > 0 ? '+' : '';
   ctx.fillStyle = '#1c1e24';
   ctx.font = '700 14px "Open Sans", sans-serif';
   ctx.textAlign = 'left';
   ctx.fillText(
-    `Normalization Gain (${preset.name}): ${sign}${gainDB.toFixed(1)} dB   |   Phase Correlation: ${(snap.correlation ?? 1).toFixed(2)}   |   True Peak Clips: ${snap.clipCount}`,
+    `Normalization Gain (${preset.name}): ${sign}${gainDB.toFixed(1)} dB   |   Phase Correlation: ${(snap.correlation ?? 1).toFixed(2)} (Min: ${(snap.minCorrelation ?? 1).toFixed(2)})   |   True Peak Clips: ${snap.clipCount}`,
     20,
     H - 24
   );
@@ -1538,7 +1599,7 @@ function exportCSVTimeline() {
     return;
   }
 
-  const lines = ['Time_Sec,Momentary_LUFS,ShortTerm_LUFS,Integrated_LUFS,TruePeak_L_dBTP,TruePeak_R_dBTP'];
+  const lines = ['Time_Sec,Momentary_LUFS,ShortTerm_LUFS,Integrated_LUFS,TruePeak_L_dBTP,TruePeak_R_dBTP,Phase_Correlation'];
   for (const pt of timeline) {
     lines.push(
       [
@@ -1548,6 +1609,7 @@ function exportCSVTimeline() {
         isFinite(pt.integrated) ? pt.integrated.toFixed(2) : '',
         isFinite(pt.truePeakL) ? pt.truePeakL.toFixed(2) : '',
         isFinite(pt.truePeakR) ? pt.truePeakR.toFixed(2) : '',
+        isFinite(pt.correlation) ? pt.correlation.toFixed(3) : '1.000',
       ].join(',')
     );
   }
@@ -1583,6 +1645,7 @@ function exportLoudnessReport() {
       plrLU: isFinite(snap.plr) ? Number(snap.plr.toFixed(2)) : null,
       psrLU: isFinite(snap.psr) ? Number(snap.psr.toFixed(2)) : null,
       phaseCorrelation: Number((snap.correlation ?? 1).toFixed(2)),
+      minPhaseCorrelation: Number((snap.minCorrelation ?? 1).toFixed(2)),
       truePeakClips: snap.clipCount,
       durationSec: Number(snap.durationSec.toFixed(2)),
     },
@@ -1674,6 +1737,7 @@ function resetMeters() {
 
 function toggleNormPreview() {
   normPreviewEnabled = !normPreviewEnabled;
+  lastReadoutUpdateTime = 0;
   btnNormPreview.classList.toggle('active', normPreviewEnabled);
   if (btnFloatAudio) btnFloatAudio.classList.toggle('active-red', normPreviewEnabled);
   applyRealtimePlaybackRouting();
@@ -1681,11 +1745,24 @@ function toggleNormPreview() {
 
 function toggleMonoCheck() {
   monoCheckEnabled = !monoCheckEnabled;
+  lastReadoutUpdateTime = 0;
   btnMonoCheck.classList.toggle('active', monoCheckEnabled);
   if (fileIsPlaying) {
     const curSec = getFilePlayheadSec();
     startFilePlayback(curSec);
   }
+}
+
+function syncLayerButtonsUI() {
+  document.querySelectorAll('.ylm-circle-toggle').forEach((btn) => {
+    const key = btn.dataset.layer;
+    if (key && key in layers) {
+      btn.classList.toggle('active', layers[key]);
+    }
+  });
+  if (btnFloatAudio) btnFloatAudio.classList.toggle('active-red', normPreviewEnabled);
+  if (btnFloatPeaks) btnFloatPeaks.classList.toggle('active-red', layers.T);
+  if (btnFloatTarget) btnFloatTarget.classList.toggle('active-red', layers.G);
 }
 
 btnLiveInput.addEventListener('click', startLiveDeviceInput);
@@ -1702,6 +1779,13 @@ btnNormPreview.addEventListener('click', toggleNormPreview);
 btnAutoScale.addEventListener('click', toggleNormPreview);
 btnMonoCheck.addEventListener('click', toggleMonoCheck);
 
+if (btnIntLra) {
+  btnIntLra.addEventListener('click', () => {
+    barMeterMode = barMeterMode === 'M' ? 'S' : 'M';
+    btnIntLra.textContent = barMeterMode === 'M' ? 'INT-LRA' : 'ST-LRA';
+  });
+}
+
 fileInput.addEventListener('change', (e) => {
   const file = e.target.files?.[0];
   if (file) handleFileLoad(file);
@@ -1710,6 +1794,7 @@ fileInput.addEventListener('change', (e) => {
 
 presetSelect.addEventListener('change', (e) => {
   currentPresetKey = e.target.value;
+  lastReadoutUpdateTime = 0;
   applyRealtimePlaybackRouting();
 });
 
@@ -1762,7 +1847,7 @@ document.querySelectorAll('.ylm-circle-toggle').forEach((btn) => {
     const key = btn.dataset.layer;
     if (!key) return;
     layers[key] = !layers[key];
-    btn.classList.toggle('active', layers[key]);
+    syncLayerButtonsUI();
   });
 });
 
@@ -1772,13 +1857,13 @@ if (btnFloatAudio) {
 if (btnFloatPeaks) {
   btnFloatPeaks.addEventListener('click', () => {
     layers.T = !layers.T;
-    btnFloatPeaks.classList.toggle('active-red', layers.T);
+    syncLayerButtonsUI();
   });
 }
 if (btnFloatTarget) {
   btnFloatTarget.addEventListener('click', () => {
     layers.G = !layers.G;
-    btnFloatTarget.classList.toggle('active-red', layers.G);
+    syncLayerButtonsUI();
   });
 }
 
@@ -1797,6 +1882,63 @@ btnStopFile.addEventListener('click', () => {
   else stopAllActiveAudio();
 });
 
+// Accurate Click & Drag Scrubbing on Main Graph and Bottom Minimap
+function seekFromCanvasCoords(clientX) {
+  const slot = getSlot();
+  if (currentMode !== 'file' || !slot.audioBuffer || !slot.analysis) return;
+  const rect = historyCanvas.getBoundingClientRect();
+  const x = clientX - rect.left;
+
+  let targetSec = 0;
+  if (dragSeekZone === 'minimap') {
+    const innerX = lastGraphView.miniLeft + 8;
+    const innerW = Math.max(10, lastGraphView.miniW - 16);
+    const ratio = Math.max(0, Math.min(1, (x - innerX) / innerW));
+    targetSec = ratio * slot.audioBuffer.duration;
+  } else {
+    const plotW = Math.max(20, lastGraphView.plotRight - lastGraphView.plotLeft);
+    const ratio = Math.max(0, Math.min(1, (x - lastGraphView.plotLeft) / plotW));
+    const span = Math.max(0.5, lastGraphView.endTime - lastGraphView.startTime);
+    targetSec = lastGraphView.startTime + ratio * span;
+  }
+
+  targetSec = Math.max(0, Math.min(slot.audioBuffer.duration - 0.05, targetSec));
+  slot.pauseOffsetSec = targetSec;
+  lastReadoutUpdateTime = 0;
+  if (fileIsPlaying) {
+    startFilePlayback(targetSec);
+  }
+}
+
+historyCanvas.addEventListener('mousedown', (e) => {
+  const slot = getSlot();
+  if (currentMode !== 'file' || !slot.audioBuffer || !slot.analysis) return;
+  const rect = historyCanvas.getBoundingClientRect();
+  const x = e.clientX - rect.left;
+  const y = e.clientY - rect.top;
+
+  if (y >= lastGraphView.miniTop - 6 && x >= lastGraphView.miniLeft) {
+    isDraggingSeek = true;
+    dragSeekZone = 'minimap';
+    seekFromCanvasCoords(e.clientX);
+  } else if (x >= lastGraphView.plotLeft && x <= lastGraphView.plotRight) {
+    isDraggingSeek = true;
+    dragSeekZone = 'main';
+    seekFromCanvasCoords(e.clientX);
+  }
+});
+
+window.addEventListener('mousemove', (e) => {
+  if (isDraggingSeek) {
+    seekFromCanvasCoords(e.clientX);
+  }
+});
+
+window.addEventListener('mouseup', () => {
+  isDraggingSeek = false;
+  dragSeekZone = null;
+});
+
 historyCanvas.addEventListener('mousemove', (e) => {
   const rect = historyCanvas.getBoundingClientRect();
   hoverPoint = { x: e.clientX - rect.left, y: e.clientY - rect.top };
@@ -1804,24 +1946,6 @@ historyCanvas.addEventListener('mousemove', (e) => {
 
 historyCanvas.addEventListener('mouseleave', () => {
   hoverPoint = null;
-});
-
-historyCanvas.addEventListener('click', (e) => {
-  const slot = getSlot();
-  if (currentMode !== 'file' || !slot.audioBuffer || !slot.analysis) return;
-  const rect = historyCanvas.getBoundingClientRect();
-  const plotLeft = 152;
-  const plotRight = rect.width - 12;
-  const plotW = Math.max(20, plotRight - plotLeft);
-  const clickX = e.clientX - rect.left;
-  if (clickX < plotLeft || clickX > plotRight) return;
-
-  const ratio = (clickX - plotLeft) / plotW;
-  const targetSec = ratio * slot.audioBuffer.duration;
-  slot.pauseOffsetSec = targetSec;
-  if (fileIsPlaying) {
-    startFilePlayback(targetSec);
-  }
 });
 
 window.addEventListener('dragover', (e) => {
@@ -1868,11 +1992,12 @@ function tick(now = performance.now()) {
   const snap = getActiveSnapshot();
   updateBallistics(snap, dt);
   updateReadouts(snap, now);
-  renderHistoryGraph(snap);
-  renderBarMeters(snap);
+  renderHistoryGraph();
+  renderBarMeters();
   requestAnimationFrame(tick);
 }
 
+syncLayerButtonsUI();
 populateAudioDevices();
 requestAnimationFrame(tick);
 
